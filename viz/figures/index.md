@@ -1,0 +1,63 @@
+# Figures
+
+Generated 2026-09-22 17:53 by `viz/make_figures.py` from `runs/` (35 models: linear-bin-s2, linear-ord0.25-s2, linear-ord0.5-s2, linear-ord1-s2, linear-ord2-s2, mlp256-bin-s2, mlp256-ord0.5-s2; + baselines). Best = `linear-ord2-s2/max` (macro AP 0.809); per-pooler figures use `linear-ord2-s2`. CIs: bootstrap over test bags, B=2000, paired. Do not edit by hand.
+
+## 01_bag_structure
+
+![01_bag_structure](01_bag_structure.png)
+
+How an hour becomes a MIL bag: two 1-min clips per hour, each tiled into 12 contiguous 5 s windows (instances). Labels exist only per bag. The model predicts the bag label from its instance predictions.
+
+## 02_pipeline
+
+![02_pipeline](02_pipeline.png)
+
+Model pipeline: frozen Perch v2 embeddings per 5 s window, a per-window probe, a pooling function that turns 24 window logits into one bag logit per species, and an optional cumulative-link ordinal head on that same logit.
+
+## 03_pooling_toy
+
+![03_pooling_toy](03_pooling_toy.png)
+
+How the fixed poolers turn window logits into a bag score, using the project's own pooling code on toy inputs. Mean needs calls to fill the hour. Max reacts to one confident window but gives gradient to that window only. LME and linear-softmax sit in between. Attention is learned, so it is shown on real data in figure 10.
+
+## 04_calendar
+
+![04_calendar](04_calendar.png)
+
+Every labelled hour with audio, coloured by calling index, for each species. Each column is one night (noon to noon), so a night of calling is one contiguous band. The top strip shows which split each 3-day block belongs to. Both frogs call at night, and Oreobates only from October on, which is why the clock baseline does well for Oreobates.
+
+## 05_forest_ap
+
+![05_forest_ap](05_forest_ap.png)
+
+Test average precision for every model and baseline, as seed-averaged AP with a 95% bootstrap CI over the test bags. The faint vertical line marks the best model. Colour and marker show the pooler, and hollow markers are the MLP probe.
+
+## 06_effects
+
+![06_effects](06_effects.png)
+
+Controlled comparisons: each Δ compares two models that differ in one factor only (probe, ordinal loss weight, or window stride), with the same pooler, splits and seeds. Filled markers are CIs that exclude 0.
+
+## 07_ordinal_sweep_linear
+
+![07_ordinal_sweep_linear](07_ordinal_sweep_linear.png)
+
+Test AP against the ordinal loss weight w for the linear probe. Points are dodged sideways so the CIs stay readable. The grey line is chance. Use `effects` for paired Δ vs w = 0.
+
+## 08_per_index
+
+![08_per_index](08_per_index.png)
+
+AP of each calling index against silent hours, for every pooler in `linear-ord2-s2` and the baselines (grey diamonds). Short dark bars are chance. Index 1 (isolated calls) is the hard, pooling-sensitive case.
+
+## 09_val_vs_test
+
+![09_val_vs_test](09_val_vs_test.png)
+
+Validation vs test macro AP per model. Validation AP is the early-stopping optimum, so it is optimistic. A weak rank correlation means one validation split can't be trusted to pick the pooler.
+
+## 10_pooling_example
+
+![10_pooling_example](10_pooling_example.png)
+
+A real test hour (`HELECHOS_20191104_05`, *G. chrysosticta* index 1), chosen automatically as the hour where the poolers disagree most. Left: each model's per-window probability. Right: the weight its pooler put on each window (max is one-hot, mean is uniform, attention is learned from the embedding).
