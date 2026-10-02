@@ -10,8 +10,8 @@ attention.
 | | |
 |---|---|
 | labels | `data/df_helechos_with2020.csv`: one row per clock hour, 2018-09 → 2020-07, with a 0–3 calling index per species (0 silent, 1 isolated calls, 2 overlapping, 3 chorus) |
-| audio | Helechos recorder, 2019-09-23 → 2019-12-03: 1 min clips at :00 and :30, 44.1 kHz |
-| species | *Gastrotheca chrysosticta* (Jun–Nov) and *Oreobates berdemenos* (Oct–Dec only); both nocturnal and multi-label (100 hours have both) |
+| audio | Helechos recorder, 1 min clips at :00 and :30, 44.1 kHz: 2019-02-27 → 2019-04-15 (1125 hours, all silent for both species) and 2019-09-23 → 2019-12-03 (1707 hours) |
+| species | *Gastrotheca chrysosticta* and *Oreobates berdemenos*, both nocturnal. In the audio, *G.* calls Sep–Nov and *O.* Oct–Dec. Multi-label: 48 of the 2832 audio hours have both |
 
 Annotators listened only to the recorded clips, so every positive hour contains
 a call. The hourly index is the max over the clips in that hour. That is the
@@ -24,11 +24,9 @@ bag       = 1 hour  → presence (index > 0) and index (0–3) per species
  instance = 5 s window (Perch v2 input), 12 per clip, 24 per bag
 ```
 
-Embeddings are cached at a 2.5 s hop. The contiguous 5 s tiling is the exact
-subset `win_idx % 2 == 0`: `--stride 2`, the default. `--stride 1` gives 50%
-overlap instead. Contiguous windows are the default because overlap duplicates
-calls across neighbouring windows, which would change what mean, LME and
-linear-softmax measure.
+Windows are contiguous and non-overlapping (0–5 s, 5–10 s, …, 55–60 s), and
+only these are embedded. Overlap would duplicate calls across neighbouring
+windows, which would change what mean, LME and linear-softmax measure.
 
 ## Model
 
@@ -66,7 +64,7 @@ hours to score above single-call hours.
 | setting | value |
 |---|---|
 | input | embeddings z-scored with the train mean/std |
-| loss | BCE on the bag logit, `pos_weight` = neg/pos per species (G 13.0, O 3.6). Ordinal runs add w × BCE on k = 2, 3 |
+| loss | BCE on the bag logit, `pos_weight` = neg/pos per species (G 21.6, O 6.9). Ordinal runs add w × BCE on k = 2, 3 |
 | optimiser | AdamW, lr 1e-3, weight decay 1e-2, grad clip 5, batch 32 bags |
 | stopping | ≤ 60 epochs; stop after 10 epochs with no gain in val macro AP; restore the best epoch |
 | seeds | 5 per model. The seed sets init, dropout and batch order, never the split |
@@ -80,9 +78,13 @@ one closest to that ratio in bags and in per-species positives is kept.
 
 | split | bags | G positive | O positive |
 |---|---|---|---|
-| train | 1203 | 86 | 261 |
-| val | 288 | 20 | 56 |
-| test | 216 | 18 | 62 |
+| train | 1968 | 87 | 249 |
+| val | 432 | 18 | 72 |
+| test | 432 | 19 | 58 |
+
+The Feb–Apr blocks are split the same way, so every split holds both silent
+off-season hours and in-season hours. Adding audio changes the block grid and
+the shuffle, so it changes every split.
 
 ## Evaluation
 
@@ -93,6 +95,9 @@ one closest to that ratio in bags and in per-species positives is kept.
 - **By index:** AP of the hours at each index against silent hours.
 - **Recall at fixed precision:** the score cutoff is chosen on validation and
   applied unchanged to test (`scripts/recall_at_precision.py`).
+- **Fit per split:** the saved checkpoints are rescored on train, val and test
+  to compare AP across splits (`scripts/split_ap.py`). The script checks that
+  its val and test numbers reproduce `metrics.json`.
 - **Baselines** (no training on audio):
   - *clock*: the training presence rate for the bag's (hour of day × month).
   - *zero-shot congeneric*: max over the bag of Perch's logits for the same genus.

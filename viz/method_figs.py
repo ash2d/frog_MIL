@@ -20,6 +20,7 @@ from common import (
     SURFACE,
     pcolor,
     plabel,
+    scale_fonts,
 )
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 
@@ -155,6 +156,55 @@ def pipeline(save, n_windows=24, dim=1536):
          "and an optional cumulative-link ordinal head on that same logit.")
 
 
+def pipeline_wytham(save, n_windows=12, dim=1536, fs=10.5):
+    """Slide version of ``pipeline``: one 1 min clip, no heading, no ordinal box,
+    larger text on an 8 in canvas (axis units = inches)."""
+    att = 2 * (dim * 128 + 128) + 128 * 2 + 2
+    fig, ax = plt.subplots(figsize=(8, 3.6))
+    ax.set_xlim(0, 8); ax.set_ylim(0, 3.6); ax.axis("off")
+
+    y1, h = 2.5, 1.0
+    _box(ax, 0.05, y1, 1.5, h, "1 min clip\n44.1 kHz", fs=fs)
+    _box(ax, 1.95, y1, 1.9, h, f"{n_windows} windows × 5 s\nat 32 kHz", fs=fs)
+    _box(ax, 4.25, y1, 1.5, h, "Perch v2\n(frozen)", fc=FROZEN, weight="bold", fs=fs)
+    _box(ax, 6.15, y1, 1.8, h, f"$X$\n[{n_windows} × {dim}]", fc=SURFACE, fs=fs)
+    for a, b in [(1.55, 1.95), (3.85, 4.25), (5.75, 6.15)]:
+        _arrow(ax, (a, y1 + h / 2), (b, y1 + h / 2))
+
+    y2 = 0.1
+    _box(ax, 0.05, y2 + 0.2, 1.85, 1.35, "instance\nprobe\n(linear)", fc=TRAINED,
+         weight="bold", fs=fs)
+    ax.text(3.2, y2 + 1.45, f"window logits [{n_windows} × 2]", ha="center", fontsize=fs - 1,
+            color=INK)
+    vals = [0.05, 0.05, 0.05, 0.9, 0.1, 0.1, 0.1, 0.1, 0.6, 0.1, 0.05, 0.05]
+    x0, cw = 2.45, 1.5 / n_windows
+    for j in range(n_windows):
+        for c, sp in enumerate(SPECIES):
+            ax.add_patch(Rectangle((x0 + j * cw, y2 + 0.85 - c * 0.38), cw * 0.85, 0.32,
+                                   fc=SPECIES_COLOR[sp], alpha=0.12 + 0.85 * (
+                                       vals[j] if c == 0 else vals[::-1][j] * 0.5),
+                                   ec="none"))
+    ax.text(x0 - 0.05, y2 + 1.01, "G", ha="right", va="center", fontsize=fs - 2, color=INK2)
+    ax.text(x0 - 0.05, y2 + 0.63, "O", ha="right", va="center", fontsize=fs - 2, color=INK2)
+    _box(ax, 4.3, y2, 2.05, 1.75, "", fc=TRAINED)
+    ax.text(5.325, y2 + 1.47, "MIL pooling", ha="center", fontsize=fs, weight="bold")
+    for k, p in enumerate(POOL_ORDER):
+        ax.text(4.42, y2 + 1.17 - k * 0.24, "■", color=pcolor(p), fontsize=fs, va="center")
+        ax.text(4.65, y2 + 1.17 - k * 0.24, plabel(p) + (f" (+{att:,})" if p == "attention"
+                else ""), fontsize=fs - 1.5, va="center", color=INK)
+    _box(ax, 6.75, y2 + 0.25, 1.2, 1.25, "bag logit $s$\n\n$P$(present)\n= $\\sigma(s)$", fs=fs)
+    _arrow(ax, (1.9, y2 + 0.87), (x0 - 0.2, y2 + 0.87))
+    _arrow(ax, (x0 + 1.55, y2 + 0.87), (4.3, y2 + 0.87))
+    _arrow(ax, (6.35, y2 + 0.87), (6.75, y2 + 0.87))
+    ax.plot([7.05, 7.05, 0.975], [y1, 2.3, 2.3], color=INK2, lw=1.4, solid_joinstyle="round")
+    _arrow(ax, (0.975, 2.31), (0.975, y2 + 1.55))
+    ax.text(2.2, 1.95, "Trained MIL head", fontsize=fs + 0.5, weight="bold")
+    save(fig, "pipeline_wytham",
+         "Slide version of the pipeline for a single 1 min recording (12 windows): frozen "
+         "Perch v2 embeddings per 5 s window, a per-window probe, and a pooling function "
+         "that turns the window logits into one bag logit per species.")
+
+
 # --------------------------------------------------------------------------- M3
 def _pool_numpy(name, logits):
     """Run the project's own pooler on a [N] (one species) logit vector."""
@@ -164,49 +214,49 @@ def _pool_numpy(name, logits):
     return float(torch.sigmoid(bag)), w[0, :, 0].numpy()
 
 
-def pooling_toy(save, n=24, pos=2.0, neg=-3.0):
+def pooling_toy(save, n=24, pos=2.0, neg=-3.0, font=1.8):
     fixed = [p for p in POOL_ORDER if p != "attention"]
-    fig = plt.figure(figsize=(12, 4.4))
-    gs = fig.add_gridspec(len(fixed), 3, width_ratios=[1.1, 1.1, 1.3], hspace=0.35,
-                          wspace=0.3)
+    fig = plt.figure(figsize=(12, 5.2))
+    gs = fig.add_gridspec(len(fixed), 3, width_ratios=[1.1, 1.1, 1.3], hspace=0.45,
+                          wspace=0.35)
     a1, a2 = fig.add_subplot(gs[:, 0]), fig.add_subplot(gs[:, 1])
 
     ks = np.arange(0, n + 1)
     for p in fixed:
         ys = [_pool_numpy(p, np.r_[np.full(k, pos), np.full(n - k, neg)])[0] for k in ks]
         a1.plot(ks, ys, color=pcolor(p), label=plabel(p))
-    a1.set(xlabel=f"windows containing a call (of {n})", ylabel="bag P(present)",
+    a1.set(xlabel=f"call windows (of {n})", ylabel="bag P(present)",
            ylim=(0, 1.02), xlim=(0, n))
-    a1.set_title("A. More calls in the hour")
-    a1.text(n * 0.98, 0.05, f"call window logit {pos:+g}\nsilent window logit {neg:+g}",
-            ha="right", fontsize=7.5, color=MUTED)
+    a1.set_title("A. Multiple calls")
 
     xs = np.linspace(-4, 10, 120)
     for p in fixed:
         ys = [_pool_numpy(p, np.r_[x, np.full(n - 1, neg)])[0] for x in xs]
         a2.plot(xs, ys, color=pcolor(p), label=plabel(p))
-    a2.set(xlabel="logit of the single call window", ylabel="bag P(present)",
+    a2.set(xlabel="logit of the call window", ylabel="bag P(present)",
            ylim=(0, 1.02))
-    a2.set_title("B. One call, growing confidence")
-    a1.legend(loc="lower right", bbox_to_anchor=(1.0, 0.14), fontsize=8)
+    a2.set_title("B. One call")
+    a1.legend(loc="lower right", fontsize=8)
     bag = np.full(n, neg); bag[[5, 6, 17]] = [pos, pos - 1.5, pos + 1]
     for r, p in enumerate(fixed):
         a = fig.add_subplot(gs[r, 2])
         prob, w = _pool_numpy(p, bag)
         a.bar(np.arange(n), w, color=pcolor(p), width=0.8)
-        a.set_xlim(-0.6, n - 0.4); a.set_ylim(0, 1.05); a.set_yticks([0, 1])
+        a.set_xlim(-0.6, n - 0.4); a.set_ylim(0, 1.7); a.set_yticks([0, 1])
         a.set_xticks([] if r < len(fixed) - 1 else [0, 11, 23],
                      [] if r < len(fixed) - 1 else ["1", "12", "24"])
         a.axvline(11.5, color=AXIS, lw=0.8)
         a.grid(axis="x", visible=False)
-        a.text(n - 0.5, 0.95, f"{plabel(p)}: P = {prob:.2f}", ha="right", va="top",
+        a.text(n - 0.5, 1.65, f"{plabel(p)}: P = {prob:.2f}", ha="right", va="top",
                fontsize=7.5, color=INK)
         if r == 0:
-            a.set_title("C. Weight each window gets (3 call windows)")
+            a.set_title("C. Window weights")
     fig.axes[-1].set_xlabel("window")
+    scale_fonts(fig, font)
     save(fig, "pooling_toy",
          "How the fixed poolers turn window logits into a bag score, using the project's "
-         "own pooling code on toy inputs. Mean needs calls to fill the hour. Max reacts "
+         f"own pooling code on toy inputs (call windows logit {pos:+g}, silent {neg:+g}; "
+         "C has 3 call windows). Mean needs calls to fill the hour. Max reacts "
          "to one confident window but gives gradient to that window only. LME and "
          "linear-softmax sit in between. Attention is learned, so it is shown on real "
          "data in figure 10.")

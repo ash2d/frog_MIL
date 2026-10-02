@@ -1,6 +1,6 @@
 # Figures
 
-Generated 2026-09-25 17:09 by `viz/make_figures.py` from `runs/` (35 models: linear-bin-s2, linear-ord0.25-s2, linear-ord0.5-s2, linear-ord1-s2, linear-ord2-s2, mlp256-bin-s2, mlp256-ord0.5-s2; + baselines). Best = `linear-ord2-s2/max` (macro AP 0.859); per-pooler figures use `linear-ord2-s2`. CIs: bootstrap over test bags, B=2000, paired. Do not edit by hand.
+Generated 2026-09-24 23:59 by `viz/make_figures.py` from `runs/` (35 models: linear-bin-s2, linear-ord0.25-s2, linear-ord0.5-s2, linear-ord1-s2, linear-ord2-s2, mlp256-bin-s2, mlp256-ord0.5-s2; + baselines). Best = `linear-ord2-s2/max` (macro AP 0.809); per-pooler figures use `linear-ord2-s2`. CIs: bootstrap over test bags, B=2000, paired. Do not edit by hand.
 
 ## 01_bag_structure
 
@@ -30,7 +30,7 @@ How the fixed poolers turn window logits into a bag score, using the project's o
 
 ![04_calendar](04_calendar.png)
 
-Every labelled hour with audio, coloured by calling index, for each species. Each column is one night (noon to noon), so a night of calling is one contiguous band. Stretches of more than a week without audio are collapsed into a hatched break. The top strip shows which split each 3-day block belongs to. Both frogs call at night and neither calls in the Feb–Apr recordings; Oreobates calls only from October on, which is why the clock baseline does well for Oreobates.
+Every labelled hour with audio, coloured by calling index, for each species. Each column is one night (noon to noon), so a night of calling is one contiguous band. The top strip shows which split each 3-day block belongs to. Both frogs call at night, and Oreobates only from October on, which is why the clock baseline does well for Oreobates.
 
 ## 05_forest_ap
 

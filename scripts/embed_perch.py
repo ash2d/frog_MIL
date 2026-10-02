@@ -12,12 +12,17 @@ exact rather than an interpolation fudge.
 
 Output (``--out-dir``):
     embeddings.f16.npy   [n_instances, 1536] memmap, row i = row i of instances.csv
+    logits.f16.npy       [n_instances, n_logit_columns] zero-shot logits, same rows
+    done.npy             [n_instances] bool, rows already embedded
     index.csv            instance_id, bag_id, split, win_idx  (row order)
-    meta.json            model name, dim, dtype, source manifest, progress
+    meta.json            model name, dim, dtype, window, source manifest, progress
 
-Resumable: completed clips are recorded in meta.json, so re-running after an
-interruption -- or after the rsync delivers more audio -- only does what is
-left. Rebuild the manifest first and the new rows are appended.
+Incremental: the cache is keyed by ``instance_id``, not by row position. After
+new audio lands, rebuild the manifest and rerun this script: rows already in the
+cache are carried over into the new manifest order, rows no longer in the
+manifest are dropped, and only the missing rows are embedded. Nothing is
+embedded twice, wherever the new clips sort. An interrupted run resumes the same
+way, from ``done.npy``.
 """
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ import argparse
 import collections
 import csv
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -114,6 +120,76 @@ def find_label_columns(patterns: list[str]) -> tuple[list[int], list[str]]:
     return [i for i, _ in hits], [n for _, n in hits]
 
 
+def load_cache(out_dir: Path):
+    """(instance_id -> row, done mask, meta) of an existing cache, or None."""
+    need = [out_dir / f for f in ("embeddings.f16.npy", "index.csv", "meta.json")]
+    if not all(f.exists() for f in need):
+        return None
+    meta = json.loads((out_dir / "meta.json").read_text())
+    with (out_dir / "index.csv").open() as fh:
+        ids = [r["instance_id"] for r in csv.DictReader(fh)]
+    if (out_dir / "done.npy").exists():
+        done = np.load(out_dir / "done.npy")
+    elif meta.get("n_clips_done") == meta.get("n_clips_total"):
+        done = np.ones(len(ids), bool)      # complete cache from before done.npy existed
+    else:
+        sys.exit(f"{out_dir} is an incomplete cache without done.npy; "
+                 f"embed into a fresh --out-dir")
+    return {i: k for k, i in enumerate(ids)}, done, meta
+
+
+def write_index(path: Path, rows: list[dict]) -> None:
+    with path.open("w", newline="") as fh:
+        w = csv.DictWriter(fh, ["row", "instance_id", "bag_id", "split", "win_idx"])
+        w.writeheader()
+        for i, r in enumerate(rows):
+            w.writerow({"row": i, "instance_id": r["instance_id"], "bag_id": r["bag_id"],
+                        "split": r["split"], "win_idx": r["win_idx"]})
+
+
+def rekey_cache(out_dir: Path, rows: list[dict], old, n_logits: int) -> None:
+    """Rebuild the cache in manifest order, carrying over every embedded row.
+
+    Built in a sibling directory and swapped in, so an interruption never leaves
+    embeddings and index out of step.
+    """
+    pos, old_done, meta = old
+    src = np.array([pos.get(r["instance_id"], -1) for r in rows])
+    keep = np.flatnonzero(src >= 0)
+    keep = keep[old_done[src[keep]]]
+    tmp = out_dir.with_name(out_dir.name + ".rekey")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    old_emb = np.load(out_dir / "embeddings.f16.npy", mmap_mode="r")
+    emb = np.lib.format.open_memmap(tmp / "embeddings.f16.npy", mode="w+", dtype=np.float16,
+                                    shape=(len(rows), PERCH_DIM))
+    emb[keep] = old_emb[src[keep]]
+    emb.flush()
+    del emb, old_emb
+    if n_logits:
+        old_lg = np.load(out_dir / "logits.f16.npy", mmap_mode="r")
+        lg = np.lib.format.open_memmap(tmp / "logits.f16.npy", mode="w+", dtype=np.float16,
+                                       shape=(len(rows), n_logits))
+        lg[keep] = old_lg[src[keep]]
+        lg.flush()
+        del lg, old_lg
+    done = np.zeros(len(rows), bool)
+    done[keep] = True
+    np.save(tmp / "done.npy", done)
+    write_index(tmp / "index.csv", rows)
+    meta = {k: meta[k] for k in ("model", "logit_columns", "logit_names") if k in meta}
+    meta.update(n_instances=len(rows), n_done=int(done.sum()))
+    (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
+    stale = len(pos) - len(keep)
+    print(f"re-keyed cache: kept {len(keep)} embedded rows, dropped {stale} rows no longer "
+          f"in the manifest, {len(rows) - len(keep)} rows to embed")
+    # Memmaps are closed above: on NFS an open file can't be removed, only renamed.
+    old_dir = out_dir.with_name(out_dir.name + ".old")
+    out_dir.rename(old_dir)
+    tmp.rename(out_dir)
+    shutil.rmtree(old_dir)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--instances", type=Path, default=Path("outputs/instances.csv"))
@@ -138,106 +214,107 @@ def main() -> None:
         rows = list(csv.DictReader(fh))
     if not rows:
         sys.exit(f"no instances in {args.instances}")
-
-    model = load_perch(args.model)
+    ids = [r["instance_id"] for r in rows]
+    if len(set(ids)) != len(ids):
+        sys.exit(f"duplicate instance_id in {args.instances}")
+    starts = sorted({float(r["clip_start_s"]) for r in rows if r["filepath"] == rows[0]["filepath"]})
+    hop = starts[1] - starts[0] if len(starts) > 1 else PERCH_WINDOW_S
+    if abs(hop - PERCH_WINDOW_S) > 1e-6:
+        sys.exit(f"{args.instances} has a {hop:g} s hop; the cache holds contiguous "
+                 f"{PERCH_WINDOW_S:g} s windows only. Rebuild it with frog-manifest.")
 
     if args.list_labels:
+        load_perch(args.model)
         cols, names = find_label_columns(args.logit_patterns)
         print(f"{len(names)} matches for {args.logit_patterns}:")
         for c, n in zip(cols, names):
             print(f"  [{c}] {n}")
         return
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    emb_path = args.out_dir / "embeddings.f16.npy"
-    meta_path = args.out_dir / "meta.json"
-
-    # Row i of the memmap is row i of instances.csv, so the manifest is the index.
-    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-    done = set(meta.get("done_clips", []))
-    done_logits = set(meta.get("done_logit_clips", []))
-    if meta.get("n_instances") not in (None, len(rows)):
-        print(f"manifest grew {meta['n_instances']} -> {len(rows)} rows; extending")
-    mode = "r+" if emb_path.exists() and meta.get("n_instances") == len(rows) else "w+"
-    if mode == "w+" and emb_path.exists():
-        old = np.load(emb_path, mmap_mode="r")
-        store = np.lib.format.open_memmap(emb_path.with_suffix(".tmp.npy"), mode="w+",
-                                          dtype=np.float16, shape=(len(rows), PERCH_DIM))
-        store[:len(old)] = old[:min(len(old), len(rows))]
-        del old, store
-        emb_path.with_suffix(".tmp.npy").replace(emb_path)
-        mode = "r+"
-    store = (np.lib.format.open_memmap(emb_path, mode="w+", dtype=np.float16,
-                                       shape=(len(rows), PERCH_DIM))
-             if mode == "w+" else np.load(emb_path, mmap_mode="r+"))
-
-    with (args.out_dir / "index.csv").open("w", newline="") as fh:
-        w = csv.DictWriter(fh, ["row", "instance_id", "bag_id", "split", "win_idx"])
-        w.writeheader()
-        for i, r in enumerate(rows):
-            w.writerow({"row": i, "instance_id": r["instance_id"], "bag_id": r["bag_id"],
-                        "split": r["split"], "win_idx": r["win_idx"]})
-
+    model = None
     logit_cols, logit_names = (find_label_columns(args.logit_patterns)
                                if args.save_logits else ([], []))
-    logit_store = None
+    if args.save_logits and not logit_cols:     # label asset arrives with the model download
+        model = load_perch(args.model)
+        logit_cols, logit_names = find_label_columns(args.logit_patterns)
+    emb_path, meta_path = args.out_dir / "embeddings.f16.npy", args.out_dir / "meta.json"
+    old = load_cache(args.out_dir)
+    if old is not None:
+        meta = old[2]
+        if meta.get("model") != args.model:
+            sys.exit(f"{args.out_dir} holds {meta.get('model')} embeddings, not {args.model}")
+        if meta.get("logit_columns", []) != logit_cols:
+            sys.exit(f"{args.out_dir} caches logit columns {meta.get('logit_columns')}, "
+                     f"not {logit_cols}; embed into a fresh --out-dir")
+        if list(old[0]) != ids:
+            rekey_cache(args.out_dir, rows, old, len(logit_cols))
+    else:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        np.lib.format.open_memmap(emb_path, mode="w+", dtype=np.float16,
+                                  shape=(len(rows), PERCH_DIM)).flush()
+        if logit_cols:
+            np.lib.format.open_memmap(args.out_dir / "logits.f16.npy", mode="w+",
+                                      dtype=np.float16,
+                                      shape=(len(rows), len(logit_cols))).flush()
+        np.save(args.out_dir / "done.npy", np.zeros(len(rows), bool))
+        write_index(args.out_dir / "index.csv", rows)
+
+    store = np.load(emb_path, mmap_mode="r+")
+    logit_store = (np.load(args.out_dir / "logits.f16.npy", mmap_mode="r+")
+                   if logit_cols else None)
+    done = (np.load(args.out_dir / "done.npy") if (args.out_dir / "done.npy").exists()
+            else np.ones(len(rows), bool))
     if logit_cols:
         print(f"caching {len(logit_cols)} zero-shot logit columns: "
               f"{', '.join(logit_names[:4])}...")
-        lp = args.out_dir / "logits.f16.npy"
-        logit_store = (np.load(lp, mmap_mode="r+")
-                       if lp.exists() and np.load(lp, mmap_mode="r").shape[0] == len(rows)
-                       else np.lib.format.open_memmap(
-                           lp, mode="w+", dtype=np.float16,
-                           shape=(len(rows), len(logit_cols))))
 
-    by_clip: dict[str, list[tuple[int, dict]]] = collections.defaultdict(list)
+    by_clip: dict[str, list[int]] = collections.defaultdict(list)
     for i, r in enumerate(rows):
-        by_clip[r["filepath"]].append((i, r))
-    # A clip embedded without logits is not done when logits are wanted --
-    # otherwise the logit memmap silently keeps zeros for those rows.
-    todo = [c for c in by_clip
-            if c not in done or (logit_cols and c not in done_logits)]
-    if logit_cols and len(done - done_logits):
-        print(f"{len(done - done_logits)} clips have embeddings but no logits; redoing")
+        by_clip[r["filepath"]].append(i)
+    todo = [c for c, idx in by_clip.items() if not done[idx].all()]
     if args.limit_clips:
         todo = todo[:args.limit_clips]
-    print(f"{len(rows)} instances over {len(by_clip)} clips; {len(todo)} clips to do")
+    print(f"{len(rows)} instances over {len(by_clip)} clips; {int(done.sum())} rows cached, "
+          f"{len(todo)} clips to embed")
 
-    def write_meta() -> None:
-        meta_path.write_text(json.dumps({
-            "model": args.model, "dim": PERCH_DIM, "dtype": "float16",
-            "sample_rate": PERCH_SR, "window_s": PERCH_WINDOW_S,
-            "instances_csv": str(args.instances), "n_instances": len(rows),
-            "done_clips": sorted(done), "n_clips_done": len(done),
-            "n_clips_total": len(by_clip),
-            "logit_columns": logit_cols, "logit_names": logit_names,
-            "done_logit_clips": sorted(done_logits),
-        }, indent=2))
-
-    try:
-        for n_done, clip in enumerate(tqdm(todo, unit="clip"), 1):
-            items = sorted(by_clip[clip], key=lambda t: int(t[1]["win_idx"]))
-            idx = np.array([i for i, _ in items])
-            wins = cut_windows(read_clip_32k_mono(clip), [r for _, r in items])
-            parts = [embed_batch(model, wins[s:s + args.batch_size], bool(logit_cols))
-                     for s in range(0, len(wins), args.batch_size)]
-            store[idx] = np.concatenate([e for e, _ in parts]).astype(np.float16)
-            if logit_store is not None and parts[0][1] is not None:
-                lg = np.concatenate([lg_ for _, lg_ in parts])
-                logit_store[idx] = lg[:, logit_cols].astype(np.float16)
-                done_logits.add(clip)
-            done.add(clip)
-            # Checkpoint so a hard kill costs minutes, not the whole run.
-            if n_done % 200 == 0:
-                store.flush()
-                write_meta()
-    finally:
+    def checkpoint() -> None:
         store.flush()
         if logit_store is not None:
             logit_store.flush()
-        write_meta()
-        print(f"\n{len(done)}/{len(by_clip)} clips embedded -> {emb_path}")
+        np.save(args.out_dir / "done.npy", done)
+        meta_path.write_text(json.dumps({
+            "model": args.model, "dim": PERCH_DIM, "dtype": "float16",
+            "sample_rate": PERCH_SR, "window_s": PERCH_WINDOW_S, "hop_s": PERCH_WINDOW_S,
+            "instances_csv": str(args.instances), "n_instances": len(rows),
+            "n_done": int(done.sum()), "n_clips_total": len(by_clip),
+            "logit_columns": logit_cols, "logit_names": logit_names,
+        }, indent=2))
+
+    if not todo:
+        checkpoint()
+        print("cache is complete")
+        return
+    model = model or load_perch(args.model)
+    try:
+        for n_done, clip in enumerate(tqdm(todo, unit="clip"), 1):
+            idx = sorted((i for i in by_clip[clip] if not done[i]),
+                         key=lambda i: int(rows[i]["win_idx"]))
+            wins = cut_windows(read_clip_32k_mono(clip), [rows[i] for i in idx])
+            parts = [embed_batch(model, wins[s:s + args.batch_size], bool(logit_cols))
+                     for s in range(0, len(wins), args.batch_size)]
+            if logit_cols and parts[0][1] is None:
+                sys.exit(f"{args.model} returned no logits; rerun with --no-save-logits")
+            store[idx] = np.concatenate([e for e, _ in parts]).astype(np.float16)
+            if logit_store is not None:
+                lg = np.concatenate([lg_ for _, lg_ in parts])
+                logit_store[idx] = lg[:, logit_cols].astype(np.float16)
+            done[idx] = True
+            # Checkpoint so a hard kill costs minutes, not the whole run.
+            if n_done % 200 == 0:
+                checkpoint()
+    finally:
+        checkpoint()
+        print(f"\n{int(done.sum())}/{len(rows)} rows embedded -> {emb_path}")
 
 
 if __name__ == "__main__":

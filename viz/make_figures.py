@@ -4,9 +4,9 @@
     .venv/bin/python viz/make_figures.py --out viz/figures_mlp --include 'mlp256-*'
     .venv/bin/python viz/make_figures.py --focus-run linear-ord1-s2 --no-instances
 
-Ten figures, numbered in reading order (see ``common.FIGURES``): the MIL setup
+Eleven figures, numbered in reading order (see ``common.FIGURES``): the MIL setup
 (1-3), the data (4), results across all runs (5-7, 9), and pooler behaviour
-within the focus run (8, 10).
+within the focus run (8, 10), and a slide-ready forest plot of the focus run (11).
 
 Run from the project root. Nothing is retrained: result figures come from each
 model's ``predictions.npz`` (bootstrap identical in scheme to ``frog-report``),
@@ -15,7 +15,7 @@ bootstrap and inference outputs are cached in ``<out>/.cache`` and invalidated
 when the underlying files change, so reruns are fast.
 
 "Best" is the top test macro AP, as in ``frog-report``; the per-pooler figures
-(AP by index, pooling example) use the best model's run unless
+(AP by index, pooling example, simplified forest) use the best model's run unless
 ``--focus-run`` names another.
 """
 from __future__ import annotations
@@ -89,6 +89,7 @@ def main() -> None:
 
     method_figs.bag_structure(save)
     method_figs.pipeline(save)
+    method_figs.pipeline_wytham(save)
     method_figs.pooling_toy(save)
     data_figs.calendar(save, bags)
     result_figs.forest(save, infos, st, best.model_id)
@@ -96,6 +97,7 @@ def main() -> None:
     result_figs.ordinal_sweep(save, infos, st)
     result_figs.per_index(save, infos, st, focus)
     result_figs.val_vs_test(save, infos, st)
+    result_figs.forest_simple(save, infos, st, focus)
     if not a.no_instances:
         import instance_figs
         pools = sorted({i.pooling for i in models if i.run_id == focus})
@@ -106,6 +108,13 @@ def main() -> None:
         else:
             instance_figs.pooling_example(save, inst, infos, focus, a.example_bag,
                                           a.example_species)
+            inst12 = instance_figs.infer_run(a.runs, focus, pools, cache, max_windows=12)
+            instance_figs.pooling_example(save, inst12, infos, focus, a.example_bag,
+                                          a.example_species, name="pooling_example_wytham",
+                                          width=12 * 0.7, title=False, max_windows=12,
+                                          capitalise=True, font=1.8,
+                                          short_titles=True, seed_range=True,
+                                          labels={"linear_softmax": "Lin-softmax"})
 
     runs_used = sorted({i.run_id for i in models})
     save.write_index(

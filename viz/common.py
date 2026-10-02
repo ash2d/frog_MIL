@@ -91,7 +91,15 @@ def pooler_legend_handles(poolings, probes=("linear",), hollow_probe=None):
 
 # The ten figures, in reading order. Output files are numbered by this list.
 FIGURES = ["bag_structure", "pipeline", "pooling_toy", "calendar", "forest_ap", "effects",
-           "ordinal_sweep", "per_index", "val_vs_test", "pooling_example"]
+           "ordinal_sweep", "per_index", "val_vs_test", "pooling_example", "forest_simple"]
+
+
+def scale_fonts(fig, k: float) -> None:
+    """Multiply every text size in ``fig`` (ticks, labels, legends, annotations) by
+    ``k``. Call before the figure's own layout step."""
+    from matplotlib.text import Text
+    for t in fig.findobj(Text):
+        t.set_fontsize(t.get_fontsize() * k)
 
 
 class Saver:
@@ -151,7 +159,7 @@ def load_infos(runs: Path) -> list[Info]:
         cfg = json.loads((runs / run_id / "config.json").read_text())
         out.append(Info(m, m.model_id, run_id, pooling, "model",
                         hidden=int(cfg["hidden"]), w=float(cfg["ordinal_weight"]),
-                        stride=int(cfg["stride"]), label=m.model_id))
+                        stride=int(cfg.get("stride", 2)), label=m.model_id))
     return out
 
 

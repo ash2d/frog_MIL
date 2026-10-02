@@ -1,10 +1,7 @@
 """Bags of frozen Perch v2 embeddings, assembled from the manifest.
 
-The embedding cache is built at the finest hop (2.5 s). ``stride`` selects a
-coarser geometry from it without re-embedding, because ``win_idx % stride == 0``
-is an exact subset: ``stride=2`` is the contiguous 5 s tiling, ``stride=1``
-keeps the 50%-overlap version. That is the whole reason the manifest uses a hop
-that divides the window.
+The embedding cache holds one row per contiguous 5 s window (0-5 s, 5-10 s, ...),
+so a bag is every cached row of its hour: 2 clips x 12 windows = 24.
 """
 from __future__ import annotations
 
@@ -26,7 +23,6 @@ MAX_INDEX = 3
 class DataConfig:
     emb_dir: Path = Path("embeddings")
     bags_csv: Path = Path("outputs/bags.csv")
-    stride: int = 2          # 2 = contiguous 5 s tiling, 1 = 2.5 s overlap
     max_instances: int = 0   # 0 = keep the whole bag (24 instances fits easily)
     standardize: bool = True
     allow_incomplete: bool = False   # see the guard in BagEmbeddingDataset
@@ -47,12 +43,16 @@ class BagEmbeddingDataset(Dataset):
                 f"  scripts/perch_env.sh python scripts/embed_perch.py "
                 f"--out-dir {cfg.emb_dir}")
         meta = json.loads(meta_path.read_text())
+        if meta.get("hop_s") != meta.get("window_s"):
+            raise RuntimeError(
+                f"{cfg.emb_dir} holds overlapping windows (an old 2.5 s-hop cache). "
+                f"Rebuild the manifest with frog-manifest and rerun scripts/embed_perch.py.")
         # Unembedded rows are zeros, not missing, so a half-finished cache trains
         # silently and scores like noise. Fail loudly instead.
-        done, total = meta.get("n_clips_done", 0), meta.get("n_clips_total", 0)
+        done, total = meta.get("n_done", 0), meta.get("n_instances", 0)
         if done < total and not cfg.allow_incomplete:
             raise RuntimeError(
-                f"embedding cache is incomplete ({done}/{total} clips). Finish it "
+                f"embedding cache is incomplete ({done}/{total} windows). Finish it "
                 f"with scripts/embed_perch.py, or set allow_incomplete=True if you "
                 f"really want zero vectors for the rest.")
         self.dim = meta["dim"]
@@ -63,10 +63,15 @@ class BagEmbeddingDataset(Dataset):
         rows_by_bag: dict[str, list[int]] = defaultdict(list)
         with (cfg.emb_dir / "index.csv").open() as fh:
             for r in csv.DictReader(fh):
-                if r["bag_id"] in bags and int(r["win_idx"]) % cfg.stride == 0:
+                if r["bag_id"] in bags:
                     rows_by_bag[r["bag_id"]].append(int(r["row"]))
+        missing = [b for b in bags if not rows_by_bag[b]]
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} {split} bags of {cfg.bags_csv} are not in {cfg.emb_dir} "
+                f"(e.g. {missing[0]}). Rerun scripts/embed_perch.py after frog-manifest.")
 
-        self.bag_ids = sorted(b for b in bags if rows_by_bag[b])
+        self.bag_ids = sorted(bags)
         self.rows = {b: np.array(sorted(rows_by_bag[b])) for b in self.bag_ids}
         self.bags = [bags[b] for b in self.bag_ids]
         self.mean, self.std = stats if stats is not None else self._fit_stats()

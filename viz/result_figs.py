@@ -21,6 +21,7 @@ from common import (
     plabel,
     pmarker,
     pooler_legend_handles,
+    scale_fonts,
 )
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
@@ -94,6 +95,38 @@ def forest(save, infos: list[Info], st: Stats, best: str):
          "Test average precision for every model and baseline, as seed-averaged AP with a "
          "95% bootstrap CI over the test bags. The faint vertical line marks the best "
          "model. Colour and marker show the pooler, and hollow markers are the MLP probe.")
+
+
+def forest_simple(save, infos: list[Info], st: Stats, run_id: str, font=1.8):
+    """Slide version of ``forest``: the five poolers of one run plus the baselines,
+    per-species AP only, in a fixed order (poolers, then baselines)."""
+    pools = [i for p in ["max", "lme", "mean", "linear_softmax", "attention"]
+             for i in infos if i.is_model and i.run_id == run_id and i.pooling == p]
+    order = pools + [i for i in infos if not i.is_model]
+    n = len(order)
+    fig, axes = plt.subplots(1, 2, figsize=(7, 0.62 * n + 1.6), sharey=True)
+    ys = np.arange(n)[::-1]
+    for a, (what, lab) in zip(axes, WHATS[1:]):
+        for y, i in zip(ys, order):
+            p, b = st.get(i.model_id, what)
+            lo, hi = ci(b)
+            a.plot([lo, hi], [y, y], color=pcolor(i.pooling) if i.is_model else BASE_COLOR,
+                   lw=2, alpha=0.55, solid_capstyle="round")
+            _point(a, p, y, i, size=8)
+        a.axvline(_chance(infos, what), color=MUTED, lw=1, zorder=1)
+        a.text(_chance(infos, what), n - 0.3, " chance", fontsize=8, color=MUTED, va="bottom")
+        a.axhline(n - len(pools) - 0.5, color=GRID, lw=0.8)
+        a.set_xlim(0, 1); a.set_xticks([0, 0.5, 1]); a.set_xlabel(lab)
+        a.grid(axis="y", visible=False)
+    labels = [plabel(i.pooling) if i.is_model else i.label.replace(", ", ",\n") for i in order]
+    axes[0].set_yticks(ys, [t[:1].upper() + t[1:] for t in labels])
+    axes[0].set_ylim(-0.7, n - 0.3)
+    scale_fonts(fig, font)
+    fig.tight_layout()
+    save(fig, "forest_simple",
+         f"Simplified forest plot for slides: test AP per species for each pooler in "
+         f"`{run_id}` (colours as in figure 5) and the three baselines (grey), as "
+         f"seed-averaged AP with a 95% bootstrap CI over the test bags.")
 
 
 # --------------------------------------------------------------------------- R4
@@ -259,25 +292,23 @@ def val_vs_test(save, infos, st: Stats):
     models = [i for i in infos if i.is_model]
     v = np.array([i.m.val_ap.mean() for i in models])
     t = np.array([st.macro(i.model_id) for i in models])
-    fig, a = plt.subplots(figsize=(6.4, 5.4))
+    fig, a = plt.subplots(figsize=(7.8, 5.4))
     lo, hi = min(v.min(), t.min()) - 0.02, max(v.max(), t.max()) + 0.02
     a.plot([lo, hi], [lo, hi], color=AXIS, lw=1, zorder=1)
     a.text(hi, hi, "val = test ", ha="right", va="bottom", fontsize=7, color=MUTED,
-           rotation=45, rotation_mode="anchor")
+           rotation=45, rotation_mode="anchor", transform_rotates_text=True)
     for i, vv, tt in zip(models, v, t):
         _point(a, vv, tt, i, size=7)
-    for k, lab in ((np.argmax(t), "test best"), (np.argmax(v), "val best")):
-        a.annotate(f"{lab}: {models[k].model_id}", (v[k], t[k]), xytext=(0, 18),
-                   textcoords="offset points", fontsize=7, color=INK2, ha="center",
-                   arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.8))
     r = spearmanr(v, t).statistic
     a.text(0.02, 0.97, f"Spearman ρ = {r:.2f}  ({len(models)} models)", transform=a.transAxes,
            va="top", fontsize=8.5, color=INK)
-    a.set(xlabel="validation macro AP (best epoch, mean over seeds)", ylabel="test macro AP",
+    a.set(xlabel="validation macro AP", ylabel="test macro AP",
           xlim=(lo, hi), ylim=(lo, hi))
-    a.set_aspect("equal")
+    a.xaxis.set_major_locator(plt.MultipleLocator(0.05))
+    a.yaxis.set_major_locator(plt.MultipleLocator(0.05))
     _legend(a, models, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=7.5)
     a.set_title("Does validation pick the test winner?")
+    scale_fonts(fig, 1.65)
     save(fig, "val_vs_test",
          "Validation vs test macro AP per model. Validation AP is the early-stopping "
          "optimum, so it is optimistic. A weak rank correlation means one validation split "

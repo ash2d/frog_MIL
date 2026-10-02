@@ -14,3 +14,8 @@ viz/figures*/*.pdf
 
 # agent task prompts
 prompts/
+
+# archived untracked state from earlier data versions (runs_previous_*, ...)
+outputs_*/
+embeddings_*/
+runs_*/

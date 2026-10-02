@@ -3,14 +3,14 @@
 Data model
 ----------
 One annotation row covers one clock hour. The recorder writes 2-3 short clips
-inside that hour, so the hour is a *bag* and each clip -- or, more usefully, each
-fixed-length window inside a clip -- is an *instance*. The hourly label is the
+inside that hour, so the hour is a *bag* and each contiguous 5 s window inside a
+clip (0-5 s, 5-10 s, ...) is an *instance*. The hourly label is the
 merge (max) of the per-clip calling-intensity indices, which is exactly the
 standard MIL assumption: bag_label = max(instance_labels).
 
 Outputs (written to --out-dir):
     bags.csv       one row per annotated hour that has audio
-    instances.csv  one row per fixed-length window, keyed back to its bag
+    instances.csv  one row per contiguous window, keyed back to its bag
     summary.json   counts, splits and the parameters used
 
 Usage:
@@ -133,8 +133,9 @@ def assign_splits(day_pos: dict, block_days: int, ratios: tuple[float, float, fl
     return out
 
 
-def windows(duration_s: float, win: float, hop: float, drop_partial: bool):
-    t, out = 0.0, []
+def windows(duration_s: float, win: float, drop_partial: bool):
+    """Contiguous, non-overlapping windows; the tail is kept if at least half full."""
+    t, out, hop = 0.0, [], win
     while t + win <= duration_s + (0 if drop_partial else hop):
         end = min(t + win, duration_s)
         if end - t >= (win if drop_partial else win * 0.5):
@@ -151,9 +152,6 @@ def main() -> None:
     ap.add_argument("--out-dir", type=Path, default=Path("outputs"))
     ap.add_argument("--window-s", type=float, default=5.0,
                     help="instance length; 5.0 is Perch v2's native window")
-    ap.add_argument("--hop-s", type=float, default=2.5,
-                    help="instance hop. Keep window_s/hop_s an integer so coarser "
-                         "hops stay exact subsets (win_idx %% k) of this cache")
     ap.add_argument("--drop-partial", action="store_true",
                     help="drop the short trailing window instead of zero-padding it")
     ap.add_argument("--block-days", type=int, default=3,
@@ -221,7 +219,7 @@ def main() -> None:
 
             for c in clips:
                 for w, (s, e) in enumerate(windows(c["duration_s"], args.window_s,
-                                                   args.hop_s, args.drop_partial)):
+                                                   args.drop_partial)):
                     iw.writerow({
                         "instance_id": f"{bag_id}_{c['start']:%H%M%S}_{s:07.2f}",
                         "bag_id": bag_id, "split": split, "filepath": c["path"],
@@ -235,7 +233,7 @@ def main() -> None:
     summary = {
         "generated": dt.datetime.now().isoformat(timespec="seconds"),
         "audio_dir": str(args.audio_dir), "annotation_csv": str(args.csv),
-        "window_s": args.window_s, "hop_s": args.hop_s,
+        "window_s": args.window_s, "hop_s": args.window_s,
         "drop_partial": args.drop_partial,
         "block_days": args.block_days, "ratios": list(args.ratios),
         "seed": args.seed, "species": SPECIES,
@@ -248,7 +246,7 @@ def main() -> None:
     (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     print(f"bags      : {len(hours)}  -> {args.out_dir/'bags.csv'}")
-    print(f"instances : {n_inst}  ({args.window_s}s window, {args.hop_s}s hop)"
+    print(f"instances : {n_inst}  ({args.window_s}s contiguous windows)"
           f"  -> {args.out_dir/'instances.csv'}")
     for split, c in sorted(counts.items()):
         print(f"  {split:5} {c['bags']:>4} bags  {c['instances']:>6} instances  "

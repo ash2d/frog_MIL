@@ -309,7 +309,7 @@ def main() -> None:
           "**Baselines** (no audio training): *clock* = training presence rate for "
           "the bag's (hour of day × month); *Perch zero-shot* = max over the bag of "
           "Perch v2 logits for congeneric species or its 'Frog' class.\n",
-          "Model IDs are `{probe}-{target}-s{stride}/{pooling}`: "
+          "Model IDs are `{probe}-{target}-s2/{pooling}`: "
           "`linear`/`mlp256` = probe, `bin`/`ord0.5` = binary or ordinal loss "
           "(weight 0.5), `s2` = contiguous 5 s windows. Weights and predictions "
           "are in `runs/<model_id>/`.\n",

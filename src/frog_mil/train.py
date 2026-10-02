@@ -6,7 +6,7 @@
 Naming: a *run* is one probe/target/geometry setting; a *model* is a run plus a
 pooler. IDs are derived from the config, never typed by hand:
 
-    run_id    {probe}-{target}-s{stride}   e.g. linear-bin-s2, mlp256-ord0.5-s2
+    run_id    {probe}-{target}-s2          e.g. linear-bin-s2, mlp256-ord0.5-s2
     model_id  {run_id}/{pooling}           e.g. mlp256-ord0.5-s2/max
 
 Output, per model: ``runs/<run_id>/<pooling>/``
@@ -125,7 +125,9 @@ def aggregate(runs: list[dict]) -> dict:
 def run_id(a) -> str:
     probe = f"mlp{a.hidden}" if a.hidden else "linear"
     target = f"ord{a.ordinal_weight:g}" if a.ordinal_weight else "bin"
-    return f"{probe}-{target}-s{a.stride}"
+    # "s2" names the only window geometry, contiguous 5 s windows (stride 2 of the
+    # original 2.5 s grid). It stays in the ID so runs keep their earlier names.
+    return f"{probe}-{target}-s2"
 
 
 def save_model(out: Path, runs: list[dict], preds: list[dict]) -> None:
@@ -159,8 +161,6 @@ def main() -> None:
                     help="replace an existing run whose config differs")
     ap.add_argument("--pooling", default="all",
                     help="'all' or one of " + ", ".join(POOLERS))
-    ap.add_argument("--stride", type=int, default=2,
-                    help="2 = contiguous 5s tiling (default), 1 = 2.5s overlap")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--hidden", type=int, default=0, help="0 = linear probe")
     ap.add_argument("--dropout", type=float, default=0.2)
@@ -180,11 +180,11 @@ def main() -> None:
     a = ap.parse_args()
 
     cfg = vars(a).copy()
-    cfg["data"] = DataConfig(emb_dir=a.emb_dir, bags_csv=a.bags_csv, stride=a.stride)
+    cfg["data"] = DataConfig(emb_dir=a.emb_dir, bags_csv=a.bags_csv)
     poolings = list(POOLERS) if a.pooling == "all" else [a.pooling]
     rid = a.tag or run_id(a)
     out = a.out_dir / rid
-    # run_id encodes probe/target/stride only. Any other change (lr, epochs, ...)
+    # run_id encodes probe/target only. Any other change (lr, epochs, ...)
     # must get its own --tag, or it would silently overwrite a different run.
     cfg_now = {"run_id": rid, **{k: str(v) for k, v in vars(a).items()
                                  if k not in ("device", "num_workers", "overwrite")}}

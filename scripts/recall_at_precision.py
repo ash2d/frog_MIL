@@ -49,8 +49,7 @@ def oracle_recall(y, s, p):
 
 def score_model(run_dir: Path, pooling: str, device: str):
     cfg = json.loads((run_dir / "config.json").read_text())
-    dc = DataConfig(emb_dir=Path(cfg["emb_dir"]), bags_csv=Path(cfg["bags_csv"]),
-                    stride=int(cfg["stride"]))
+    dc = DataConfig(emb_dir=Path(cfg["emb_dir"]), bags_csv=Path(cfg["bags_csv"]))
     loaders, sets = make_loaders(dc, int(cfg["batch_size"]), 0, 0)
     pw = sets["train"].pos_weight()
     pred = np.load(run_dir / pooling / "predictions.npz")
