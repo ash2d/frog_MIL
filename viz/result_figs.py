@@ -1,4 +1,4 @@
-"""Result figures, built from test predictions and the shared bootstrap."""
+"""Result figures, built from out-of-fold predictions and the shared block bootstrap."""
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
@@ -12,6 +12,7 @@ from common import (
     INK2,
     MUTED,
     POOL_ORDER,
+    REGIME_COLOR,
     SP_SHORT,
     SURFACE,
     Info,
@@ -26,7 +27,7 @@ from common import (
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
 
-from frog_mil.data import SPECIES
+from frog_mil.config import SPECIES
 
 WHATS = [("macro", "macro AP"), (0, f"{SP_SHORT['gastrotheca']} AP"),
          (1, f"{SP_SHORT['oreobates']} AP")]
@@ -65,7 +66,7 @@ def _legend(fig_or_ax, infos, extra=(), **kw):
 
 
 # --------------------------------------------------------------------------- R1
-def forest(save, infos: list[Info], st: Stats, best: str):
+def forest(save, infos: list[Info], st: Stats, ref: str):
     order = sorted(infos, key=lambda i: -st.macro(i.model_id))
     n = len(order)
     fig, axes = plt.subplots(1, 3, figsize=(13, 0.24 * n + 1.6), sharey=True)
@@ -80,21 +81,23 @@ def forest(save, infos: list[Info], st: Stats, best: str):
         a.axvline(_chance(infos, what), color=MUTED, lw=1, zorder=1)
         a.text(_chance(infos, what), n - 0.2, " chance", fontsize=7, color=MUTED, va="bottom")
         a.set_xlim(0, 1); a.set_xlabel(lab); a.grid(axis="y", visible=False)
-        bp = st.get(best, what)[0]
+        bp = st.get(ref, what)[0]
         a.axvline(bp, color=GRID, lw=0.8, zorder=0)
     axes[0].set_yticks(ys, [i.model_id for i in order], fontsize=7.5)
     for t, i in zip(axes[0].get_yticklabels(), order):
-        if i.model_id == best:
+        if i.model_id == ref:
             t.set_fontweight("bold"); t.set_color(INK)
     axes[0].set_ylim(-0.8, n - 0.2)
     _legend(fig, infos, loc="upper center", ncol=8, bbox_to_anchor=(0.5, 1.0 + 0.5 / n))
-    fig.suptitle("Test AP with 95% bootstrap CI (over test bags), sorted by macro AP",
+    fig.suptitle("Out-of-fold AP with 95% block-bootstrap CI, sorted by macro AP",
                  x=0.01, ha="left", y=1.0 + 1.6 / n, weight="bold")
     fig.tight_layout()
     save(fig, "forest_ap",
-         "Test average precision for every model and baseline, as seed-averaged AP with a "
-         "95% bootstrap CI over the test bags. The faint vertical line marks the best "
-         "model. Colour and marker show the pooler, and hollow markers are the MLP probe.")
+         "Out-of-fold average precision for every model and baseline (every hour is "
+         "scored by the cross-validation model that never saw it), seed-averaged, with a "
+         "95% block-bootstrap CI (3-day blocks resampled within each recording regime). The "
+         "bold label and faint vertical line mark the validation-selected reference model. "
+         "Colour and marker show the pooler, and hollow markers are the MLP probe.")
 
 
 def forest_simple(save, infos: list[Info], st: Stats, run_id: str, font=1.8):
@@ -124,37 +127,32 @@ def forest_simple(save, infos: list[Info], st: Stats, run_id: str, font=1.8):
     scale_fonts(fig, font)
     fig.tight_layout()
     save(fig, "forest_simple",
-         f"Simplified forest plot for slides: test AP per species for each pooler in "
-         f"`{run_id}` (colours as in figure 5) and the three baselines (grey), as "
-         f"seed-averaged AP with a 95% bootstrap CI over the test bags.")
+         f"Simplified forest plot for slides: out-of-fold AP per species for each pooler "
+         f"in `{run_id}` (colours as in figure 5) and the three baselines (grey), as "
+         f"seed-averaged AP with a 95% block-bootstrap CI.")
 
 
 # --------------------------------------------------------------------------- R4
 def _pairs(models):
     """Controlled pairs: (factor, context label, ref Info, alt Info)."""
-    key = {(i.hidden, i.w, i.stride, i.pooling): i for i in models}
+    key = {(i.hidden, i.w, i.pooling): i for i in models}
     out = []
-    for (h, w, s, p), a in key.items():
+    for (h, w, p), a in key.items():
         if h == 0:
-            for (h2, w2, s2, p2), b in key.items():
-                if h2 and (w2, s2, p2) == (w, s, p):
+            for (h2, w2, p2), b in key.items():
+                if h2 and (w2, p2) == (w, p):
                     out.append(("probe", f"MLP-{h2} − linear", f"w={w:g}", a, b))
         if w == 0:
-            for (h2, w2, s2, p2), b in key.items():
-                if w2 and (h2, s2, p2) == (h, s, p):
+            for (h2, w2, p2), b in key.items():
+                if w2 and (h2, p2) == (h, p):
                     out.append(("ordinal", f"ordinal w={w2:g} − binary", a.probe, a, b))
-        if s == 2:
-            for (h2, w2, s2, p2), b in key.items():
-                if s2 != 2 and (h2, w2, p2) == (h, w, p):
-                    out.append(("stride", f"stride {s2} − stride 2", f"{a.probe} w={w:g}",
-                                a, b))
     return out
 
 
 def effects(save, infos, st: Stats):
     models = [i for i in infos if i.is_model]
     pairs = _pairs(models)
-    factors = [f for f in ("probe", "ordinal", "stride") if any(p[0] == f for p in pairs)]
+    factors = [f for f in ("probe", "ordinal") if any(p[0] == f for p in pairs)]
     if not factors:
         return
     groups = {f: sorted({(p[1], p[2]) for p in pairs if p[0] == f},
@@ -185,8 +183,8 @@ def effects(save, infos, st: Stats):
         a.grid(axis="y", visible=False)
         for y in range(len(groups[f]) - 1):
             a.axhline(y + 0.5, color=GRID, lw=0.8)
-        a.set_title({"probe": "Effect of the probe", "ordinal": "Effect of the ordinal loss",
-                     "stride": "Effect of window overlap"}[f])
+        a.set_title({"probe": "Effect of the probe",
+                     "ordinal": "Effect of the ordinal loss"}[f])
         a.set_xlabel("Δ macro AP (paired, 95% CI)")
     hs = pooler_legend_handles(pools) + [
         Line2D([], [], ls="", marker="o", color=INK2, label="CI excludes 0"),
@@ -195,7 +193,7 @@ def effects(save, infos, st: Stats):
     fig.legend(handles=hs, loc="upper center", ncol=len(hs), bbox_to_anchor=(0.5, 1.0))
     save(fig, "effects",
          "Controlled comparisons: each Δ compares two models that differ in one factor "
-         "only (probe, ordinal loss weight, or window stride), with the same pooler, "
+         "only (probe or ordinal loss weight), with the same pooler, "
          "splits and seeds. Filled markers are CIs that exclude 0.")
 
 
@@ -204,10 +202,10 @@ def ordinal_sweep(save, infos, st: Stats):
     models = [i for i in infos if i.is_model]
     groups = {}
     for i in models:
-        groups.setdefault((i.hidden, i.stride), set()).add(i.w)
+        groups.setdefault(i.hidden, set()).add(i.w)
     groups = {k: sorted(v) for k, v in groups.items() if len(v) >= 3}
-    for (h, s), ws in groups.items():
-        sub = [i for i in models if i.hidden == h and i.stride == s]
+    for h, ws in groups.items():
+        sub = [i for i in models if i.hidden == h]
         pools = [p for p in POOL_ORDER if any(i.pooling == p for i in sub)]
         fig, axes = plt.subplots(1, 3, figsize=(13, 3.8))
         x = np.arange(len(ws))
@@ -229,16 +227,15 @@ def ordinal_sweep(save, infos, st: Stats):
             a.set_xticks(x, [f"{w:g}" + (" (binary)" if w == 0 else "") for w in ws])
             a.set_xlabel("ordinal loss weight w"); a.set_title(lab)
             a.axhline(_chance(infos, what), color=MUTED, lw=1)
-        axes[0].set_ylabel("test AP (95% CI)")
+        axes[0].set_ylabel("out-of-fold AP (95% CI)")
         axes[-1].legend(loc="lower right", fontsize=7.5)
         probe = f"MLP-{h}" if h else "linear"
-        name = f"ordinal_sweep_{'mlp' + str(h) if h else 'linear'}" + ("" if s == 2 else f"_s{s}")
-        fig.suptitle(f"Ordinal-loss weight sweep, {probe} probe"
-                     + ("" if s == 2 else f", stride {s}"), x=0.01, ha="left",
+        name = f"ordinal_sweep_{'mlp' + str(h) if h else 'linear'}"
+        fig.suptitle(f"Ordinal-loss weight sweep, {probe} probe", x=0.01, ha="left",
                      weight="bold")
         fig.tight_layout()
         save(fig, name,
-             f"Test AP against the ordinal loss weight w for the {probe} probe. Points are "
+             f"Out-of-fold AP against the ordinal loss weight w for the {probe} probe. Points are "
              "dodged sideways so the CIs stay readable. The grey line is chance. Use "
              "`effects` for paired Δ vs w = 0.")
 
@@ -250,27 +247,28 @@ def per_index(save, infos, st: Stats, run_id: str):
     base = [i for i in infos if not i.is_model]
     fig, axes = plt.subplots(1, len(SPECIES), figsize=(12, 3.9), sharey=True)
     for c, (a, sp) in enumerate(zip(axes, SPECIES)):
-        lvls = [l for (cc, l) in st.cells if cc == c and l > 0]
+        lvls = [cell[2] for cell in st.cells if cell[0] == "level" and cell[1] == c]
+        n_pos = {l: int((infos[0].m.idx[:, c] == l).sum()) for l in (1, 2, 3)}
         x = np.arange(len(lvls))
         for k, i in enumerate(sub):
             dx = (k - (len(sub) - 1) / 2) * 0.06
-            pts = [st.ap(i.model_id, c, l) for l in lvls]
-            cis = [ci(st.ap_boot(i.model_id, c, l)) for l in lvls]
+            pts = [st.ap(i.model_id, ("level", c, l)) for l in lvls]
+            cis = [ci(st.ap_boot(i.model_id, ("level", c, l))) for l in lvls]
             a.vlines(x + dx, [q[0] for q in cis], [q[1] for q in cis], color=pcolor(i.pooling),
                      lw=1.2, alpha=0.45)
             a.plot(x + dx, pts, color=pcolor(i.pooling), marker=pmarker(i.pooling), ms=6.5,
                    ls="", label=plabel(i.pooling))
         for k, i in enumerate(base):
-            a.plot(x + 0.34, [st.ap(i.model_id, c, l) for l in lvls], ls="", marker="D",
+            a.plot(x + 0.34, [st.ap(i.model_id, ("level", c, l)) for l in lvls], ls="", marker="D",
                    ms=4.5, color=BASE_COLOR, alpha=0.4 + 0.2 * k,
                    label=i.label if c == 0 else None)
         n0 = int((infos[0].m.idx[:, c] == 0).sum())
         for xx, l in zip(x, lvls):
-            npos = st.n_pos[(c, l)]
+            npos = n_pos[l]
             a.plot([xx - 0.4, xx + 0.4], [npos / (npos + n0)] * 2, color=INK2, lw=1.2)
-        a.set_xticks(x, [f"index {l}\n(n = {st.n_pos[(c, l)]})" for l in lvls])
+        a.set_xticks(x, [f"index {l}\n(n = {n_pos[l]})" for l in lvls])
         a.set_title(SP_SHORT[sp], style="italic"); a.set_ylim(0, 1.02)
-        skipped = [l for l in (1, 2, 3) if (c, l) not in st.cells]
+        skipped = [l for l in (1, 2, 3) if not st.has(("level", c, l))]
         if skipped:
             a.text(0.99, 0.98, "omitted (n < 5): " + ", ".join(f"index {l}" for l in skipped),
                    transform=a.transAxes, ha="right", va="top", fontsize=7, color=MUTED)
@@ -302,14 +300,61 @@ def val_vs_test(save, infos, st: Stats):
     r = spearmanr(v, t).statistic
     a.text(0.02, 0.97, f"Spearman ρ = {r:.2f}  ({len(models)} models)", transform=a.transAxes,
            va="top", fontsize=8.5, color=INK)
-    a.set(xlabel="validation macro AP", ylabel="test macro AP",
+    a.set(xlabel="validation macro AP (mean over seeds × folds)",
+          ylabel="out-of-fold test macro AP",
           xlim=(lo, hi), ylim=(lo, hi))
     a.xaxis.set_major_locator(plt.MultipleLocator(0.05))
     a.yaxis.set_major_locator(plt.MultipleLocator(0.05))
     _legend(a, models, loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=7.5)
-    a.set_title("Does validation pick the test winner?")
+    a.set_title("Does validation rank models like test?")
     scale_fonts(fig, 1.65)
     save(fig, "val_vs_test",
-         "Validation vs test macro AP per model. Validation AP is the early-stopping "
-         "optimum, so it is optimistic. A weak rank correlation means one validation split "
-         "can't be trusted to pick the pooler.")
+         "Validation vs out-of-fold test macro AP per model. Validation AP is each fold "
+         "model's early-stopping optimum on its validation fold, averaged over folds and "
+         "seeds, so it is optimistic. The report selects its reference model on this axis; "
+         "a weak rank correlation means that choice is close to arbitrary among the top "
+         "models.")
+
+
+# --------------------------------------------------------------------------- R8
+def per_regime(save, infos, st: Stats, run_id: str, regime: np.ndarray):
+    """Presence AP within each recording regime, per pooler of one run."""
+    sub = sorted([i for i in infos if i.run_id == run_id],
+                 key=lambda i: POOL_ORDER.index(i.pooling) if i.pooling in POOL_ORDER else 9)
+    base = [i for i in infos if not i.is_model]
+    regs = [r for r in REGIME_COLOR if r in set(regime)] + sorted(set(regime) - set(REGIME_COLOR))
+    fig, axes = plt.subplots(1, len(SPECIES), figsize=(12, 3.9), sharey=True)
+    y = infos[0].m.idx > 0
+    for c, (a, sp) in enumerate(zip(axes, SPECIES)):
+        rr = [r for r in regs if st.has(("regime", c, r))]
+        x = np.arange(len(rr))
+        for k, i in enumerate(sub):
+            dx = (k - (len(sub) - 1) / 2) * 0.06
+            pts = [st.ap(i.model_id, ("regime", c, r)) for r in rr]
+            cis = [ci(st.ap_boot(i.model_id, ("regime", c, r))) for r in rr]
+            a.vlines(x + dx, [q[0] for q in cis], [q[1] for q in cis], color=pcolor(i.pooling),
+                     lw=1.2, alpha=0.45)
+            a.plot(x + dx, pts, color=pcolor(i.pooling), marker=pmarker(i.pooling), ms=6.5,
+                   ls="", label=plabel(i.pooling))
+        for k, i in enumerate(base):
+            a.plot(x + 0.34, [st.ap(i.model_id, ("regime", c, r)) for r in rr], ls="",
+                   marker="D", ms=4.5, color=BASE_COLOR, alpha=0.4 + 0.2 * k,
+                   label=i.label if c == 0 else None)
+        for xx, r in zip(x, rr):
+            a.plot([xx - 0.4, xx + 0.4], [y[regime == r, c].mean()] * 2, color=INK2, lw=1.2)
+        a.set_xticks(x, [f"{r}\n({int(y[regime == r, c].sum())} / {int((regime == r).sum())})"
+                         for r in rr])
+        a.set_title(SP_SHORT[sp], style="italic"); a.set_ylim(0, 1.02)
+    axes[0].set_ylabel("presence AP within regime (95% CI)")
+    h, l = axes[0].get_legend_handles_labels()
+    h.append(Line2D([], [], color=INK2, lw=1.2)); l.append("chance")
+    fig.legend(h, l, loc="upper center", ncol=len(l), bbox_to_anchor=(0.5, 1.05), fontsize=7.5)
+    fig.suptitle(f"AP by recording regime — {run_id}", x=0.01, ha="left", y=1.1,
+                 weight="bold")
+    fig.tight_layout()
+    save(fig, "per_regime",
+         f"Presence AP within each recording regime for every pooler in `{run_id}` and the "
+         "baselines (grey diamonds); tick labels give positive / total hours. `8k-3clip` = "
+         "8 kHz, three 1 min clips per hour (Sep–Oct 2018); `44k-1clip` = 44.1 kHz, one clip "
+         "(Nov–Dec 2018); `44k-2clip` = 44.1 kHz, two clips (2019). Short dark bars are "
+         "chance, which differs between regimes, so compare each group with its own bar.")

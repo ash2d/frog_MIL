@@ -1,0 +1,27 @@
+# The runs `frog run train` keeps up to date for the current dataset.
+# Each [[run]] is the arguments of one `frog-train` call (flag names without the
+# leading dashes, underscores for dashes). Settings that aren't in the run_id
+# (lr, epochs, dropout, ...) need a `tag = "<new run_id>"`.
+
+[[run]]                       # linear-bin-s2
+hidden = 0
+ordinal_weight = 0
+
+[[run]]                       # linear-ord0.25-s2
+ordinal_weight = 0.25
+
+[[run]]                       # linear-ord0.5-s2
+ordinal_weight = 0.5
+
+[[run]]                       # linear-ord1-s2
+ordinal_weight = 1
+
+[[run]]                       # linear-ord2-s2
+ordinal_weight = 2
+
+[[run]]                       # mlp256-bin-s2
+hidden = 256
+
+[[run]]                       # mlp256-ord0.5-s2
+hidden = 256
+ordinal_weight = 0.5

@@ -1,167 +1,164 @@
-"""Bags of frozen Perch v2 embeddings, assembled from the manifest.
+"""Bags of frozen Perch v2 embeddings, held as one padded tensor.
 
-The embedding cache holds one row per contiguous 5 s window (0-5 s, 5-10 s, ...),
-so a bag is every cached row of its hour: 2 clips x 12 windows = 24.
+The whole dataset is small (~5k bags x <= 36 windows x 1536 dims, ~0.5 GB in
+float16), so it is loaded once, onto the GPU if there is one, and every fold,
+seed and pooler trains from it without a DataLoader.
+
+A bag is every cached row of its hour, in manifest order: 12 windows per 1 min
+clip, so 12, 24 or 36 per bag depending on the recording regime. Padded
+windows are zero and masked; every pooler must ignore them.
 """
 from __future__ import annotations
 
 import csv
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 
-SPECIES = ["gastrotheca", "oreobates"]
-MAX_INDEX = 3
+from . import embcache
+from .config import BAGS_CSV, EMB_DIR, MAX_INDEX, SPECIES, SUMMARY_JSON, manifest_summary
+
+ROLES = ("train", "val", "test")
+
+
+def fold_roles(fold: np.ndarray, f: int, k: int) -> dict[str, np.ndarray]:
+    """Bag masks for model ``f``: test = fold f, val = fold (f+1) mod k, train = rest."""
+    return {"test": fold == f, "val": fold == (f + 1) % k,
+            "train": (fold != f) & (fold != (f + 1) % k)}
 
 
 @dataclass
-class DataConfig:
-    emb_dir: Path = Path("embeddings")
-    bags_csv: Path = Path("outputs/bags.csv")
-    max_instances: int = 0   # 0 = keep the whole bag (24 instances fits easily)
-    standardize: bool = True
-    allow_incomplete: bool = False   # see the guard in BagEmbeddingDataset
-
-
-class BagEmbeddingDataset(Dataset):
-    """One item per annotated hour: [n_instances, 1536] plus both targets."""
-
-    def __init__(self, cfg: DataConfig, split: str, stats: tuple | None = None,
-                 train: bool = False, seed: int = 0):
-        self.cfg, self.split, self.train = cfg, split, train
-        self.rng = np.random.default_rng(seed)
-
-        meta_path = cfg.emb_dir / "meta.json"
-        if not meta_path.exists():
-            raise FileNotFoundError(
-                f"no embedding cache at {cfg.emb_dir}. Build it with:\n"
-                f"  scripts/perch_env.sh python scripts/embed_perch.py "
-                f"--out-dir {cfg.emb_dir}")
-        meta = json.loads(meta_path.read_text())
-        if meta.get("hop_s") != meta.get("window_s"):
-            raise RuntimeError(
-                f"{cfg.emb_dir} holds overlapping windows (an old 2.5 s-hop cache). "
-                f"Rebuild the manifest with frog-manifest and rerun scripts/embed_perch.py.")
-        # Unembedded rows are zeros, not missing, so a half-finished cache trains
-        # silently and scores like noise. Fail loudly instead.
-        done, total = meta.get("n_done", 0), meta.get("n_instances", 0)
-        if done < total and not cfg.allow_incomplete:
-            raise RuntimeError(
-                f"embedding cache is incomplete ({done}/{total} windows). Finish it "
-                f"with scripts/embed_perch.py, or set allow_incomplete=True if you "
-                f"really want zero vectors for the rest.")
-        self.dim = meta["dim"]
-        self.emb = np.load(cfg.emb_dir / "embeddings.f16.npy", mmap_mode="r")
-
-        with (cfg.bags_csv).open() as fh:
-            bags = {r["bag_id"]: r for r in csv.DictReader(fh) if r["split"] == split}
-        rows_by_bag: dict[str, list[int]] = defaultdict(list)
-        with (cfg.emb_dir / "index.csv").open() as fh:
-            for r in csv.DictReader(fh):
-                if r["bag_id"] in bags:
-                    rows_by_bag[r["bag_id"]].append(int(r["row"]))
-        missing = [b for b in bags if not rows_by_bag[b]]
-        if missing:
-            raise RuntimeError(
-                f"{len(missing)} {split} bags of {cfg.bags_csv} are not in {cfg.emb_dir} "
-                f"(e.g. {missing[0]}). Rerun scripts/embed_perch.py after frog-manifest.")
-
-        self.bag_ids = sorted(bags)
-        self.rows = {b: np.array(sorted(rows_by_bag[b])) for b in self.bag_ids}
-        self.bags = [bags[b] for b in self.bag_ids]
-        self.mean, self.std = stats if stats is not None else self._fit_stats()
-
-    def _fit_stats(self):
-        if not self.cfg.standardize:
-            return np.zeros(self.dim, np.float32), np.ones(self.dim, np.float32)
-        idx = np.concatenate([self.rows[b] for b in self.bag_ids])
-        x = np.asarray(self.emb[idx], np.float32)
-        return x.mean(0), x.std(0) + 1e-6
+class BagData:
+    x: torch.Tensor              # [n_bags, max_n, D] float16, zero-padded
+    mask: torch.Tensor           # [n_bags, max_n] bool
+    presence: torch.Tensor       # [n_bags, C] float
+    intensity: torch.Tensor      # [n_bags, C] long, 0-3
+    rows: np.ndarray             # [n_bags, max_n] cache row of each window, -1 = pad
+    bags: list[dict]             # bags.csv rows, in bag_ids order
+    bag_ids: np.ndarray
+    fold: np.ndarray
+    n_folds: int
+    dataset_id: str
+    emb_dir: Path
 
     @property
-    def stats(self):
-        return self.mean, self.std
+    def dim(self) -> int:
+        return self.x.shape[-1]
+
+    @property
+    def device(self) -> torch.device:
+        return self.x.device
+
+    def column(self, name: str) -> np.ndarray:
+        return np.array([b[name] for b in self.bags])
+
+    def roles(self, f: int) -> dict[str, np.ndarray]:
+        return fold_roles(self.fold, f, self.n_folds)
+
+    def y(self) -> np.ndarray:
+        return self.presence.cpu().numpy().astype(int)
+
+    def idx(self) -> np.ndarray:
+        return self.intensity.cpu().numpy()
+
+
+def load_bags(emb_dir: Path = EMB_DIR, bags_csv: Path = BAGS_CSV,
+              summary_json: Path = SUMMARY_JSON, device: str | torch.device = "cpu",
+              dataset_id: str | None = None) -> BagData:
+    """Every bag of the manifest, checked against the embedding cache.
+
+    ``dataset_id``, when given, must match the manifest's (a run must be scored
+    on the data it was trained on).
+    """
+    summary = manifest_summary(summary_json)
+    if dataset_id is not None and summary["dataset_id"] != dataset_id:
+        raise RuntimeError(f"the manifest is dataset {summary['dataset_id']}, not "
+                           f"{dataset_id}; rebuild it or use that dataset's archive")
+    meta = embcache.check_matches(emb_dir, summary["instances_id"])
+
+    with bags_csv.open() as fh:
+        bags = sorted(csv.DictReader(fh), key=lambda r: r["bag_id"])
+    rows_by_bag: dict[str, list[int]] = defaultdict(list)
+    with (emb_dir / "index.csv").open() as fh:
+        for r in csv.DictReader(fh):
+            rows_by_bag[r["bag_id"]].append(int(r["row"]))
+    missing = [b["bag_id"] for b in bags if not rows_by_bag[b["bag_id"]]]
+    if missing:
+        raise RuntimeError(f"{len(missing)} bags of {bags_csv} have no cached windows "
+                           f"(e.g. {missing[0]}); run `frog run embed`")
+
+    n = max(len(v) for v in rows_by_bag.values())
+    rows = np.full((len(bags), n), -1, np.int64)
+    for i, b in enumerate(bags):
+        r = sorted(rows_by_bag[b["bag_id"]])
+        rows[i, :len(r)] = r
+    mask = rows >= 0
+    emb = np.load(emb_dir / "embeddings.f16.npy", mmap_mode="r")
+    x = np.zeros((*rows.shape, meta["dim"]), np.float16)
+    x[mask] = np.asarray(emb)[rows[mask]]
+
+    def cols(fmt, dtype):
+        return torch.tensor([[int(b[fmt.format(s)]) for s in SPECIES] for b in bags],
+                            dtype=dtype)
+
+    return BagData(
+        x=torch.from_numpy(x).to(device), mask=torch.from_numpy(mask).to(device),
+        presence=cols("{}_present", torch.float32).to(device),
+        intensity=cols("{}_index", torch.long).to(device),
+        rows=rows, bags=bags, bag_ids=np.array([b["bag_id"] for b in bags]),
+        fold=np.array([int(b["fold"]) for b in bags]), n_folds=int(summary["folds"]),
+        dataset_id=summary["dataset_id"], emb_dir=emb_dir)
+
+
+class FoldView:
+    """One fold's train/val/test bags, z-scored with that fold's train windows."""
+
+    def __init__(self, data: BagData, f: int, standardize: bool = True):
+        self.data, self.f = data, f
+        self.idx = {k: torch.from_numpy(np.flatnonzero(v)).to(data.device)
+                    for k, v in data.roles(f).items()}
+        if standardize:
+            tr = self.idx["train"]
+            w = data.x[tr][data.mask[tr]].float()          # [n_windows, D]
+            self.mean, self.std = w.mean(0), w.std(0) + 1e-6
+        else:
+            self.mean = torch.zeros(data.dim, device=data.device)
+            self.std = torch.ones(data.dim, device=data.device)
+
+    def batch(self, idx: torch.Tensor) -> dict:
+        d = self.data
+        m = d.mask[idx]
+        x = (d.x[idx].float() - self.mean) / self.std * m.unsqueeze(-1)
+        return {"x": x, "mask": m, "presence": d.presence[idx],
+                "intensity": d.intensity[idx], "idx": idx}
+
+    def batches(self, role: str, batch_size: int, gen: torch.Generator | None = None):
+        """Shuffled when ``gen`` is given, else in bag order."""
+        idx = self.idx[role]
+        if gen is not None:
+            idx = idx[torch.randperm(len(idx), generator=gen).to(idx.device)]
+        for s in range(0, len(idx), batch_size):
+            yield self.batch(idx[s:s + batch_size])
 
     def pos_weight(self) -> torch.Tensor:
-        """neg/pos per species. Gastrotheca is ~7% of hours, so without this
-        the probe learns the constant-negative solution and still scores well
-        on accuracy."""
-        out = []
-        for s in SPECIES:
-            pos = sum(int(b[f"{s}_present"]) for b in self.bags)
-            out.append((len(self.bags) - pos) / max(pos, 1))
-        return torch.tensor(out, dtype=torch.float32)
+        """neg/pos per species on train bags. Gastrotheca is a few % of hours, so
+        without this the probe learns the constant-negative solution."""
+        y = self.data.presence[self.idx["train"]]
+        pos = y.sum(0)
+        return (len(y) - pos) / pos.clamp(min=1)
 
     def cum_pos_weight(self) -> torch.Tensor:
-        """[C, 3] neg/pos for each threshold y>=1, y>=2, y>=3.
+        """[C, 3] neg/pos for each threshold y>=1, y>=2, y>=3 on train bags.
 
-        Positives thin out fast up the scale (index-3 Gastrotheca is ~1% of
-        hours), so each threshold gets its own weight rather than inheriting the
-        presence one.
+        Positives thin out fast up the scale, so each threshold gets its own
+        weight rather than inheriting the presence one.
         """
+        it = self.data.intensity[self.idx["train"]]
         out = []
-        for s in SPECIES:
-            idx = np.array([int(b[f"{s}_index"]) for b in self.bags])
-            out.append([(len(idx) - (idx >= k).sum()) / max((idx >= k).sum(), 1)
-                        for k in range(1, MAX_INDEX + 1)])
-        return torch.tensor(out, dtype=torch.float32)
-
-    def __len__(self):
-        return len(self.bag_ids)
-
-    def __getitem__(self, i):
-        bag_id = self.bag_ids[i]
-        rows = self.rows[bag_id]
-        k = self.cfg.max_instances
-        if k and len(rows) > k:
-            rows = (np.sort(self.rng.choice(rows, k, replace=False)) if self.train
-                    else rows[np.linspace(0, len(rows) - 1, k).round().astype(int)])
-        x = (np.asarray(self.emb[rows], np.float32) - self.mean) / self.std
-        b = self.bags[i]
-        return {
-            "x": torch.from_numpy(x),
-            "presence": torch.tensor([float(b[f"{s}_present"]) for s in SPECIES]),
-            "intensity": torch.tensor([int(b[f"{s}_index"]) for s in SPECIES]),
-            "bag_id": bag_id,
-            "hour": int(b["hour"]),
-            "date": b["date"],
-        }
-
-
-def collate(batch: list[dict]) -> dict:
-    """Pad ragged bags and emit the validity mask every pooler needs."""
-    n = max(b["x"].shape[0] for b in batch)
-    x = torch.zeros(len(batch), n, batch[0]["x"].shape[1])
-    mask = torch.zeros(len(batch), n, dtype=torch.bool)
-    for i, b in enumerate(batch):
-        x[i, :b["x"].shape[0]] = b["x"]
-        mask[i, :b["x"].shape[0]] = True
-    return {
-        "x": x, "mask": mask,
-        "presence": torch.stack([b["presence"] for b in batch]),
-        "intensity": torch.stack([b["intensity"] for b in batch]),
-        "bag_id": [b["bag_id"] for b in batch],
-        "hour": torch.tensor([b["hour"] for b in batch]),
-        "date": [b["date"] for b in batch],
-    }
-
-
-def make_loaders(cfg: DataConfig, batch_size: int = 32, seed: int = 0,
-                 num_workers: int = 4):
-    from torch.utils.data import DataLoader
-
-    train = BagEmbeddingDataset(cfg, "train", train=True, seed=seed)
-    sets = {"train": train}
-    for split in ("val", "test"):
-        sets[split] = BagEmbeddingDataset(cfg, split, stats=train.stats, seed=seed)
-    return {
-        name: DataLoader(ds, batch_size=batch_size, shuffle=(name == "train"),
-                         collate_fn=collate, num_workers=num_workers,
-                         drop_last=False)
-        for name, ds in sets.items()
-    }, sets
+        for k in range(1, MAX_INDEX + 1):
+            pos = (it >= k).sum(0).float()
+            out.append((len(it) - pos) / pos.clamp(min=1))
+        return torch.stack(out, -1)

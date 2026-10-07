@@ -1,15 +1,25 @@
-"""Data figures: the labelled calendar with its split blocks, and split counts."""
+"""Data figure: the labelled calendar with its folds and recording regimes."""
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from common import (AXIS, GRID, INDEX_COLOR, INDEX_LABEL, INK2, MUTED, SP_SHORT,
-                    SPLIT_COLOR, SURFACE)
+from common import (
+    AXIS,
+    FOLD_COLOR,
+    GRID,
+    INDEX_COLOR,
+    INDEX_LABEL,
+    INK2,
+    MUTED,
+    REGIME_COLOR,
+    SP_SHORT,
+    SURFACE,
+)
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch
 
-from frog_mil.data import SPECIES
+from frog_mil.config import SPECIES
 
 
 def load_bags(path) -> pd.DataFrame:
@@ -64,21 +74,24 @@ def calendar(save, bags: pd.DataFrame):
     for a, b in spans:
         seg = sorted((x, d) for d, x in dpos.items() if a <= x <= b)
         months = [(x, d) for x, d in seg if d.day == 1]
-        if not months or months[0][0] - a > 8:
+        if not months or months[0][0] - a > 12:
             ticks.append(seg[0])
         ticks += months
 
     fig = plt.figure(figsize=(12, 6.4))
-    gs = fig.add_gridspec(3, 1, height_ratios=[0.18, 1, 1], hspace=0.12)
+    gs = fig.add_gridspec(3, 1, height_ratios=[0.24, 1, 1], hspace=0.12)
     a0 = fig.add_subplot(gs[0])
-    split_day = bags.groupby("date")["split"].first()
-    for d, s in split_day.items():
-        if d not in dpos:
-            continue
-        a0.add_patch(plt.Rectangle((dpos[d], 0), 1, 1, fc=SPLIT_COLOR[s], ec="none"))
+    day = bags.groupby("night")[["fold", "regime"]].first()
+    for d, (f, r) in day.iterrows():
+        a0.add_patch(plt.Rectangle((dpos[d], 0.55), 1, 0.45, fc=FOLD_COLOR[int(f)], ec="none"))
+        a0.add_patch(plt.Rectangle((dpos[d], 0), 1, 0.4, fc=REGIME_COLOR.get(r, MUTED),
+                                   ec="none"))
     a0.set_xlim(0, ncol); a0.set_ylim(0, 1); a0.axis("off")
+    a0.text(-0.5, 0.78, "fold", ha="right", va="center", fontsize=7.5, color=INK2)
+    a0.text(-0.5, 0.2, "regime", ha="right", va="center", fontsize=7.5, color=INK2)
     a0.set_title("Labelled hours with audio, one column per night (noon → noon).  "
-                 "Top strip: split of each 3-day block", pad=8)
+                 "Top strips: cross-validation fold of each 3-day block, recording regime",
+                 pad=8)
 
     for c, sp in enumerate(SPECIES):
         a = fig.add_subplot(gs[c + 1], sharex=None)
@@ -106,15 +119,23 @@ def calendar(save, bags: pd.DataFrame):
     # Two legends: the train colour is also the index-2 colour, so keep them apart.
     l1 = fig.legend(handles=[Patch(fc=INDEX_COLOR[k], label=INDEX_LABEL[k]) for k in range(4)],
                     title="calling index", ncol=4, loc="lower right",
-                    bbox_to_anchor=(0.62, -0.06), fontsize=8, title_fontsize=8)
-    fig.legend(handles=[Patch(fc=c, label=s) for s, c in SPLIT_COLOR.items()],
-               title="split (top strip)", ncol=3, loc="lower left",
-               bbox_to_anchor=(0.66, -0.06), fontsize=8, title_fontsize=8)
+                    bbox_to_anchor=(0.55, -0.06), fontsize=8, title_fontsize=8)
+    n_f = int(bags["fold"].max()) + 1
+    l2 = fig.legend(handles=[Patch(fc=FOLD_COLOR[f], label=str(f)) for f in range(n_f)],
+                    title="fold", ncol=n_f, loc="lower left",
+                    bbox_to_anchor=(0.56, -0.06), fontsize=8, title_fontsize=8)
+    fig.legend(handles=[Patch(fc=REGIME_COLOR.get(r, MUTED), label=r)
+                        for r in [r for r in REGIME_COLOR if r in set(bags["regime"])]
+                        + sorted(set(bags["regime"]) - set(REGIME_COLOR))],
+               title="regime", ncol=1, loc="lower left",
+               bbox_to_anchor=(0.86, -0.1), fontsize=8, title_fontsize=8)
+    fig.add_artist(l2)
     fig.add_artist(l1)
     save(fig, "calendar",
          "Every labelled hour with audio, coloured by calling index, for each species. Each "
          "column is one night (noon to noon), so a night of calling is one contiguous "
          "band. Stretches of more than a week without audio are collapsed into a hatched "
-         "break. The top strip shows which split each 3-day block belongs to. Both frogs "
-         "call at night and neither calls in the Feb–Apr recordings; Oreobates calls only "
-         "from October on, which is why the clock baseline does well for Oreobates.")
+         "break. The top strips show the cross-validation fold of each 3-day block and the "
+         "recording regime: Sep–Oct 2018 at 8 kHz with three 1 min clips per hour, Nov–Dec "
+         "2018 at 44.1 kHz with one, and Feb–Apr and Sep–Dec 2019 at 44.1 kHz with two. "
+         "Both frogs call at night and neither calls in the Feb–Apr recordings.")

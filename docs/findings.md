@@ -1,155 +1,170 @@
+<!-- dataset_id: ec7b516efa -->
 # Findings
 
-Test set: 432 held-out hours (19 *Gastrotheca* and 58 *Oreobates* positives),
-using audio from 2019-02-27 to 2019-04-15 and 2019-09-23 to 2019-12-03. Half
-the test hours (216) are Mar–Apr, when neither frog calls. Full tables are in
+Dataset `ec7b516efa`: 4914 labelled hours from 2018-09-01 to 2019-12-03 in
+three recording regimes (see [methods](methods.md#data)): `8k-3clip` (Sep–Oct
+2018, 1267 h), `44k-1clip` (Nov–Dec 2018, 762 h) and `44k-2clip` (Feb–Apr and
+Sep–Dec 2019, 2885 h). There are 429 *Gastrotheca* and 581 *Oreobates*
+positive hours. Evaluation is 5-fold cross-validation over 3-day blocks, so
+**every hour is scored once, out of fold**, by a model that never saw it. The
+reference model (◆) is chosen on validation. Full tables are in
 [`results/RESULTS.md`](../results/RESULTS.md) and figures in
-[`viz/figures/`](../viz/figures/index.md). "Tied" means the paired 95% CI of
-the difference includes 0. There is no multiple-comparison correction.
+[`viz/figures/`](../viz/figures/index.md). CIs are a block bootstrap (3-day
+blocks, resampled within regimes). "Tied" means the paired 95% CI of the
+difference includes 0. There is no multiple-comparison correction.
 
 ## Pooling comparison
 
-- **Every trained model beats every baseline** on macro AP. The best baseline
-  is the clock (hour × month) at 0.482.
-- **Best: linear probe + max pooling**, 0.859 [0.784, 0.925] (`linear-ord2-s2/max`).
-  Only max at w = 1 and w = 0.25 is tied with it. Max at w = 0.5 and binary max
-  are just below (−0.022 and −0.029, CIs excluding 0 by < 0.003). Every LME
-  model is significantly worse (−0.050 to −0.095).
-- **Max is first at every ordinal weight** with the linear probe. The order of
-  the rest depends on w: mean is second at w = 0 and 0.25, and LME or
-  linear-softmax take over at w ≥ 0.5. Attention is last at every w.
-  Macro AP ranges: max 0.75–0.86, LME 0.76–0.81, linear-softmax 0.70–0.81,
-  mean 0.73–0.79, attention 0.69–0.75.
-- ***Gastrotheca* drives the ranking.** Linear max models reach 0.83–0.89 on it. On
-  *Oreobates*, every linear max/LME model scores 0.79–0.84 and most are tied.
-- **The MLP-256 probe doesn't help.** It is significantly worse than linear in
-  3 of 10 pairings (max: −0.072 and −0.087; mean at w = 0.5: −0.052) and never
-  significantly better. With the MLP probe, LME is its best pooler (0.77).
-- **Perch zero-shot is informative for *Gastrotheca* but no longer competitive:**
-  congeneric logits reach 0.687, Δ −0.199 [−0.364, −0.073] against the best model.
+- **Reference (val-selected): MLP-256 probe + LME pooling, ordinal loss
+  w = 0.5**, macro AP 0.856 [0.813, 0.887] (`mlp256-ord0.5-s2/lme`;
+  *G.* 0.837, *O.* 0.875). **The best on test** is `linear-bin-s2/mean`, 0.857
+  [0.814, 0.890]. The two are tied: +0.001 [−0.013, +0.014].
+- **Every trained model beats every baseline** by ≥ 0.34 macro AP. The clock
+  (hour × month) scores 0.445, Perch zero-shot (congeneric) 0.397, and
+  zero-shot 'Frog' 0.358. Zero-shot stays informative for *Gastrotheca* (0.692),
+  but trails the reference there by −0.146 [−0.196, −0.102].
+- **14 models are tied with the reference**: all 7 mean models, all 5
+  linear-probe LME models, `mlp256-ord0.5-s2/attention` and
+  `mlp256-ord0.5-s2/max`. The other 20 are significantly worse: every other max
+  model, every linear-softmax model, every other attention model and
+  `mlp256-bin-s2/lme`.
+- **LME and mean lead, max and linear-softmax trail.** LME and mean are the top
+  two by point estimate in all 5 linear-probe runs. In both MLP runs, attention
+  is second. Ranges with the linear probe: mean 0.844–0.857, LME 0.846–0.855, max
+  0.812–0.836, linear-softmax 0.811–0.830, attention 0.809–0.825.
+- **The species pull in opposite directions.** Against the reference, every
+  mean model is higher on *Gastrotheca* (+0.013 to +0.023, significant in 3) and
+  significantly lower on *Oreobates* (−0.021 to −0.042, all 7). Linear-softmax
+  is tied on *Gastrotheca* for the linear probe and loses −0.062 to −0.099 on
+  *Oreobates*. So *Oreobates* still separates the poolers, and the CIs for
+  *Gastrotheca* are wider.
 
-## Ordinal loss (linear probe, w ∈ {0, 0.25, 0.5, 1, 2})
+## Probe and ordinal loss
 
-- **It helps linear-softmax at every weight:** +0.021 to +0.050, all four CIs
-  excluding 0. With the MLP probe too (+0.048 at w = 0.5).
-- **Max gains at w = 2:** +0.029 [+0.002, +0.059], which is how the best model
-  gets to the top. At smaller w the max and LME gains (+0.004 to +0.045) are
-  not significant. Mean stays flat (|Δ| ≤ 0.014).
-- **It hurts attention at every weight:** −0.032 to −0.054, all significant.
-- The thresholds move more than on the smaller v1 dataset (b₃ up to 2.87 from
-  its initial 2.0), except under attention, where they barely move (≤ 0.16).
+- **The MLP-256 probe helps only attention**: +0.026 [+0.011, +0.039] (binary)
+  and +0.028 (ordinal). It hurts mean (−0.012, −0.011), binary linear-softmax
+  (−0.040) and binary LME (−0.017). The other 4 of 10 pairings are tied. The
+  MLP fits train harder (train − val gap 0.061–0.108, against 0.024–0.054 for
+  linear non-attention models) without testing better.
+- **The ordinal loss helps peaked poolers and hurts flat ones.** 13 of 25
+  ordinal − binary pairings are significantly positive. Max gains at every
+  weight (+0.014 to +0.028), attention at w ≤ 1 (+0.009 to +0.016, MLP +0.017),
+  LME at w ≤ 0.5 (+0.009, +0.010, MLP +0.027), and MLP linear-softmax +0.025.
+  4 are significantly negative: mean (−0.006, −0.013) and linear-softmax
+  (−0.014, −0.019), both at w = 1 and 2. Mean never gains.
+- **The thresholds move most under linear max** (b₃ up to 3.25 from its
+  initial 2.0), and barely under the MLP (b₃ ≤ 2.37) and attention (≤ 2.28).
 
-## Model selection is unreliable
+## By calling index
 
-- **Validation and test disagree.** Across models, the rank correlation between
-  val and test macro AP is ρ = 0.30. Validation prefers LME (0.85–0.88) and
-  mean. The model it would pick, `linear-bin-s2/lme`, is significantly worse on
-  test than the test-best (−0.095 [−0.157, −0.027]).
-- There are 18 *Gastrotheca* positives in val and 19 in test, all from a few
-  nights, so a single held-out split can't reliably pick a pooler.
+- **Isolated calls (index 1) are the hard case** for both species: AP is
+  0.37–0.50 for *Gastrotheca* and 0.33–0.56 for *Oreobates* (chance 0.03–0.04).
+  Chorus hours (index 3) reach 0.98–0.99 for *Gastrotheca* with mean pooling.
+- **Mean is best on *Gastrotheca* at every index** (index 1 up to 0.497,
+  index 2 up to 0.826). **MLP probes are best on *Oreobates* index 1**: 0.556
+  (`mlp256-bin-s2/lme`), 0.546 (reference and `mlp256-bin-s2/attention`).
+  Linear linear-softmax is worst there (0.33–0.43).
+- Max is weakest on *Gastrotheca* index 2–3 (0.65–0.75 and 0.74–0.90).
 
-## Train vs val vs test AP
+## Per regime: the 8 kHz confound
 
-Every checkpoint is rescored on all three splits (`scripts/split_ap.py`, which
-writes `outputs/split_ap.csv`). The numbers are seed means without CIs, so they
-describe the models; they don't test differences.
+*Gastrotheca* is positive in 23% of the 8 kHz hours, against 2% (Nov–Dec 2018)
+and 4% (2019) of the 44.1 kHz hours, and 291 of its 429 positives are 8 kHz.
+8 kHz windows have nothing above 4 kHz and are ~10 dB louder. A score that knew
+only the regime would get *Gastrotheca* AP 0.188 (chance 0.087) and
+*Oreobates* 0.129 (chance 0.118).
 
-- **The splits differ in difficulty, so train − val is not a clean overfitting
-  measure.** *Oreobates* val is easy for every model: val AP is 0.85–0.96, and
-  test AP is 0.10–0.24 lower for every model. For most models, *Gastrotheca* is
-  hardest on val (0.64–0.80).
-- **Linear max fits train least and tests best.** Its *Gastrotheca* train AP
-  (0.77–0.79) is the lowest of all 35 models, and its test AP (0.83–0.89) is the
-  highest. Its macro train − val gap is about 0 (−0.02 to 0.00), but only
-  because the two species cancel: *Gastrotheca* is higher on train than val, and
-  *Oreobates* is lower.
-- **The MLP probe and attention overfit.** MLP models other than
-  linear-softmax reach *Gastrotheca* train AP 0.90–0.96 but test AP 0.68–0.76.
-  MLP macro train − val gaps are 0.06–0.15, against ≤ 0.05 for linear max, LME
-  and mean. Linear attention has gaps of 0.08–0.11 and the largest seed SD on
-  train (0.04–0.07).
-- **Val favours whatever ranks *Oreobates* val well.** Linear LME and mean have
-  the highest val macro AP (0.86–0.88), mostly from *Oreobates* val (≈ 0.96),
-  and their *Oreobates* AP falls to 0.74–0.82 on test. This explains much of the
-  val/test disagreement above.
+| regime (G pos / hours) | *G.* chance | *G.* AP, all models | *O.* chance | *O.* AP, all models |
+|---|---|---|---|---|
+| `8k-3clip` (291 / 1267) | 0.23 | 0.83–0.91 | 0.08 | 0.72–0.87 |
+| `44k-1clip` (14 / 762) | 0.02 | 0.65–0.92 | 0.13 | 0.77–0.90 |
+| `44k-2clip` (124 / 2885) | 0.04 | 0.67–0.75 | 0.13 | 0.75–0.88 |
+
+- **Within every regime, AP is far above that regime's chance**, so the models
+  are not just detecting the recording format. The pooled AP (0.79–0.86 for
+  *Gastrotheca*) is not mainly regime.
+- **The 2019 hours are the hard *Gastrotheca* set**: 0.67–0.75 with 124
+  positives. Zero-shot congeneric scores 0.514 there and 0.789 on 8 kHz hours,
+  so the 8 kHz calls are easier for Perch too.
+- **But the 8 kHz negatives score high.** For the reference, the 95th
+  percentile of *Gastrotheca* scores on silent hours is 0.86 at 8 kHz, against
+  0.28 (2019) and 0.01 (Nov–Dec 2018). 8 kHz hours make up 72% of the top 429
+  *Gastrotheca* scores and 68% of the positives. That is either a regime
+  shortcut or missed calls on busy 8 kHz nights. This analysis can't tell
+  which; the band-limit control below can.
+- **Small cells have wide CIs.** *Gastrotheca* `44k-1clip` has 14 positives
+  (CIs ≈ 0.5–1.0). *Oreobates* `8k-3clip` positives come mostly from a few
+  late-October nights, so resamples that drop them give lower CI bounds as low as 0.09.
+- **Pooler differences differ by regime.** On *Oreobates* `44k-1clip`
+  (12-window bags), LME and max reach 0.89–0.90 and mean 0.77–0.84.
+
+## Validation vs test
+
+- **Validation now ranks models like test**: Spearman ρ = 0.91 over 35 models
+  (figure 09). The val-selected reference is tied with the test-best model.
+- **Validation is optimistic by a small, uniform amount.** Fold-mean val AP
+  exceeds fold-mean test AP by 0.005–0.018 for every model. The pooled
+  out-of-fold AP is a little lower again, because each fold model's scores are
+  on its own scale.
 
 ## Recall at fixed precision (cutoff chosen on val)
 
-- ***Gastrotheca*: the ranking is now good enough to be useful.** With the cutoff
-  chosen on test, recall at precision ≥ 0.8 reaches 0.84 (`linear-ord1-s2/max`;
-  it was 0.33 on v1). Cutoffs chosen on val give test precision 0.66–1.00, so
-  some models hit the target and others miss it. Recall values of models that
-  miss aren't comparable.
-- ***Oreobates*: the val cutoffs no longer carry over.** Test precision is
-  0.66–0.80 at P = 0.8 and 0.56–0.88 at P = 0.9, so most models miss the
-  target. The ranking ceiling is low too: with the cutoff chosen on test, recall
-  is at most 0.70 at P ≥ 0.8 and 0.46 at P ≥ 0.9. The clock baseline also falls
-  for *Oreobates* (0.815 on v1, 0.543 now), which points to harder test nights
-  rather than worse models.
-- Table: [`results/recall_at_precision.csv`](../results/recall_at_precision.csv).
+- **At P = 0.8 the reference recalls 0.785** [0.735, 0.824] of positive hours
+  (*G.* 0.747, *O.* 0.823), the highest of all models. 6 are tied with it: the
+  other MLP LME and attention models, and linear LME at w = 0, 0.25 and 0.5.
+- **At P = 0.9, mean leads** (0.630–0.645, tied with the reference at 0.625).
+  Max and linear-softmax drop to 0.38–0.58.
+- **Val cutoffs transfer well for *Gastrotheca*, less so for *Oreobates*.**
+  Test precision at P = 0.8 is 0.77–0.80 (*G.*) and 0.67–0.76 (*O.*); at
+  P = 0.9 it is 0.85–0.88 and 0.78–0.88. In v3 the *Gastrotheca* range was
+  0.55–0.88.
 
-## Changes from v1 (Sep–Dec audio only)
+## Changes from v3 (one 576-hour test split)
 
-v1 used 1707 hours from 2019-09-23 to 2019-12-03 and a 216-hour test set. The
-archived tables and figures are in
-[`results_previous_v1_sep-dec2019/`](../results_previous_v1_sep-dec2019/RESULTS.md)
-and [`viz/figures_previous_v1_sep-dec2019/`](../viz/figures_previous_v1_sep-dec2019/index.md).
+v3 is archived in [`archive/v3_nov2018-dec2019/`](../archive/v3_nov2018-dec2019/findings.md).
+This version adds 1267 hours of 8 kHz audio (Sep–Oct 2018, with 291
+*Gastrotheca* positives) and replaces the single split with 5-fold
+cross-validation. The test sets differ, so **v3 and this version can't be
+compared as paired deltas**.
 
-v2 adds 1125 hours from 27 Feb to 15 Apr 2019. Every one of them is silent for
-both species. Adding data recomputes the splits, so the v1 and v2 test sets
-differ, and **v1 and v2 numbers can't be compared as paired deltas**.
-
-| | v1 | v2 |
+| | v3 | ec7b516efa |
 |---|---|---|
-| hours (train / val / test) | 1203 / 288 / 216 | 1968 / 432 / 432 |
-| test positives (G / O) | 18 / 62 | 19 / 58 |
-| best model | `linear-ord2-s2/max` | `linear-ord2-s2/max` |
-| best macro AP | 0.809 [0.707, 0.894] | 0.859 [0.784, 0.925] |
-| best *G. chrysosticta* AP | 0.662 | 0.886 |
-| best *O. berdemenos* AP | 0.956 | 0.833 |
+| hours | 3594 | 4914 |
+| evaluated hours (G / O positives) | 576 test (20 / 77) | 4914 out of fold (429 / 581) |
+| model reported first | `linear-bin-s2/lme` (test-best) | `mlp256-ord0.5-s2/lme` (val-selected) |
+| its macro AP | 0.829 [0.751, 0.893] | 0.856 [0.813, 0.887] |
+| test-best macro AP | 0.829 | 0.857 (`linear-bin-s2/mean`) |
+| models tied with it | 12 | 14 |
+| clock baseline | 0.366 | 0.445 |
+| val/test rank correlation ρ | 0.66 | 0.91 |
 
-- **The silent Mar–Apr hours barely move test AP.** Scored on the 216 Sep–Dec
-  test hours alone, every model's macro AP is 0.000–0.013 higher than on the
-  full test set. The models rank those hours low easily.
-- **The rest of the change comes from which Sep–Dec nights ended up in test.**
-  *Oreobates* got harder for everything, including the clock baseline, which
-  uses no audio. *Gastrotheca* rose for every model, but with 19 positives its
-  CIs are wide.
-- **Conclusions that changed:** LME is no longer tied with max. The ordinal loss
-  now helps linear-softmax and max at w = 2 and hurts attention. Zero-shot Perch
-  is no longer tied on *Gastrotheca*.
-- **Conclusions that held:** max pooling with a linear probe is best, the
-  MLP-256 probe doesn't help, every model beats the baselines, and validation
-  can't pick the pooler.
+- **CIs are half as wide** (macro AP width 0.074 against 0.142), because every
+  positive is now tested.
+- **Conclusions that changed:** mean rose from third to joint first. Max is now
+  significantly behind, where it was tied. The ordinal loss helps max, attention
+  and LME at small w again, where v3 found no gain. The MLP probe has
+  significant effects in both directions, where v3 found none. And validation
+  now picks a model tied with the test-best, where v3's pick was significantly
+  worse.
+- **Conclusions that held:** every model beats the baselines by a wide margin,
+  LME is in the top tier, linear-softmax and linear attention trail, and
+  *Oreobates* is what separates the poolers.
+- The training data, the evaluation and the regime mix all changed together,
+  so none of these shifts can be attributed to one of them.
 
 ## Next steps
 
-1. **Cross-validation over day-blocks**, so every positive is tested once. This
-   addresses the val/test disagreement, the split difficulty differences and the
-   19-positive test set.
-2. **Listen to the top-weighted windows** in positive hours and in high-scoring
-   silent hours (`frog_mil.audio.read_segment`), to separate missed labels
-   from confusion.
-3. **1 s instances** from Perch's pre-pooling embeddings `(5, 3, 1536)`: a finer
-   bag from the same forward pass.
-4. **Ordinal thresholds:** exclude them from weight decay or give them a higher
-   learning rate.
-5. **More in-season audio.** Off-season hours add only easy negatives; the
-   test set needs more calling nights.
-
-## Adding 8 kHz recordings (1 min every 20 min)
-
-More positives are what this study needs most, but mixing recording formats
-without controls would confound the results:
-
-1. **Bandwidth.** 8 kHz audio has nothing above 4 kHz, so its embeddings differ
-   systematically. The probe could learn the recording format as a shortcut.
-2. **Bag size.** 3 clips per hour gives 36 windows. Max pooling then gets more
-   chances to fire on noise.
-3. **Prevalence.** 3 sampled minutes catch more calls than 2, so the base rate
-   per bag differs.
-
-Before mixing them in, downsample the 2019 audio to 8 kHz and rerun the sweep
-to measure the cost of the lower bandwidth. Then band-limit all audio the same
-way, record the regime per bag, split so each regime appears in train and test,
-and report AP per regime.
+1. **Band-limit all audio to 8 kHz** (resample the 44.1 kHz audio, re-embed,
+   rerun the sweep). This is the control for the regime confound: if the 8 kHz
+   negatives still score high when every regime has the same bandwidth, those
+   hours probably hold missed calls; if not, the probe learned the format.
+2. **Pull the 693 pending Dropbox files** (8 kHz, 2018-10-24 23:00 → 11-03,
+   `Helechos_09_11_2018 Martin`) with `scripts/ingest.py pull/verify/merge`,
+   then `frog run`. They fill the gap between the two 2018 regimes.
+3. **Find the audio for labelled periods without it**: 2018-12-16 → 2019-02-26,
+   2019-04-17 → 09-22, and 2020.
+4. **Listen to the top-weighted windows**, especially high-scoring silent 8 kHz
+   *Gastrotheca* hours and isolated-call hours (`frog_mil.audio.read_segment`,
+   weights in `windows.npz`), to separate missed labels from confusion.
+5. **1 s instances** from Perch's pre-pooling embeddings `(5, 3, 1536)`: a finer
+   bag from the same forward pass. Isolated calls are where it could help.

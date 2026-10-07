@@ -5,17 +5,12 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 
-# generated, large or machine-specific
+# generated, large or machine-specific (embeddings, runs and archives of old
+# data versions live in the group workspace; see src/frog_mil/config.py)
 outputs/
-embeddings/
-runs/
-viz/figures*/.cache/
-viz/figures*/*.pdf
+viz/figures/.cache/
+viz/figures/*.pdf
+archive/*/figures/*.pdf
 
 # agent task prompts
 prompts/
-
-# archived untracked state from earlier data versions (runs_previous_*, ...)
-outputs_*/
-embeddings_*/
-runs_*/

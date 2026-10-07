@@ -24,7 +24,7 @@ from common import (
 )
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 
-from frog_mil.data import SPECIES
+from frog_mil.config import SPECIES
 from frog_mil.pooling import POOLERS
 
 FROZEN, TRAINED = "#f0efec", "#cde2fb"
@@ -90,8 +90,10 @@ def bag_structure(save):
              "predicts the bag label from those instance predictions.",
              ha="center", fontsize=10, color=INK, weight="bold")
     save(fig, "bag_structure",
-         "How an hour becomes a MIL bag: two 1-min clips per hour, each tiled into 12 "
-         "contiguous 5 s windows (instances). Labels exist only per bag. The model "
+         "How an hour becomes a MIL bag: two 1-min clips per hour (2019), each tiled into "
+         "12 contiguous 5 s windows (instances). Nov–Dec 2018 hours have one clip (12 "
+         "windows) and Sep–Oct 2018 hours three (36 windows, 8 kHz). Labels exist only per "
+         "bag. The model "
          "predicts the bag label from its instance predictions.")
 
 
@@ -104,7 +106,7 @@ def pipeline(save, n_windows=24, dim=1536):
 
     # row 1: frozen feature extraction
     y1, h = 3.1, 1.1
-    _box(ax, 0.1, y1, 2.0, h, "1 hour of audio\n2 × 1 min clips\n44.1 kHz")
+    _box(ax, 0.1, y1, 2.0, h, "1 hour of audio\n1–3 × 1 min clips\n44.1 or 8 kHz")
     _box(ax, 2.7, y1, 2.2, h, f"{n_windows} windows × 5 s\nresampled to 32 kHz")
     _box(ax, 5.5, y1, 2.4, h, "Perch v2\n(frozen)", fc=FROZEN,
          weight="bold")
@@ -152,7 +154,8 @@ def pipeline(save, n_windows=24, dim=1536):
             weight="bold")
     save(fig, "pipeline",
          "Model pipeline: frozen Perch v2 embeddings per 5 s window, a per-window probe, "
-         "a pooling function that turns 24 window logits into one bag logit per species, "
+         "a pooling function that turns the window logits (12, 24 or 36 per hour, by "
+         "recording regime) into one bag logit per species, "
          "and an optional cumulative-link ordinal head on that same logit.")
 
 

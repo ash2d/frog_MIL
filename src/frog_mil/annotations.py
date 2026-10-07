@@ -5,8 +5,7 @@ pattern, co-occurrence, and how much of the annotation table is actually
 covered by audio that has landed on disk.
 
 Usage:
-    python -m frog_mil.annotations [--csv data/df_helechos_with2020.csv]
-                                   [--audio-dir <wav dir>]
+    python -m frog_mil.annotations [--csv <labels csv>] [--audio-dir <wav dir>]
 """
 from __future__ import annotations
 
@@ -14,11 +13,10 @@ import argparse
 import collections
 import csv
 import datetime as dt
-import re
 from pathlib import Path
 
-SPECIES = ["Gastrotheca chrysosticta", "Oreobates berdemenos"]
-FNAME_RE = re.compile(r"^(?P<site>[A-Za-z]+)_(?P<date>\d{8})_(?P<time>\d{6})\.wav$")
+from .config import ANNOTATIONS, AUDIO_DIR, FNAME_RE
+from .config import SPECIES_FULL as SPECIES
 
 
 def load_annotations(csv_path: Path) -> list[dict]:
@@ -55,9 +53,8 @@ def _hist(rows, key, bucket, size):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="data/df_helechos_with2020.csv", type=Path)
-    ap.add_argument("--audio-dir", type=Path,
-                    default=Path("/gws/ssde/j25b/iecdt/dash/frogs/data/2019_Rsync"))
+    ap.add_argument("--csv", default=ANNOTATIONS, type=Path)
+    ap.add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
     args = ap.parse_args()
 
     rows = load_annotations(args.csv)

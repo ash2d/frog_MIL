@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
+frog          = "frog_mil.pipeline:main"
 frog-manifest = "frog_mil.manifest:main"
 frog-train    = "frog_mil.train:main"
 frog-report   = "frog_mil.report:main"
@@ -24,7 +25,7 @@ frog-report   = "frog_mil.report:main"
 # purpose: TF and torch each vendor their own CUDA stack and fight over it.
 # Embedding is a one-off batch job, so it gets its own environment:
 #     UV_PROJECT_ENVIRONMENT=.venv-perch uv sync --only-group perch
-#     .venv-perch/bin/python scripts/embed_perch.py ...
+#     scripts/perch_env.sh python scripts/embed_perch.py      # or: frog run embed
 [dependency-groups]
 perch = [
     "tensorflow[and-cuda]~=2.20",
@@ -49,3 +50,6 @@ packages = ["src/frog_mil"]
 [tool.ruff]
 line-length = 95
 target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
