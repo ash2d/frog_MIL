@@ -35,10 +35,11 @@ from .models import MILModel
 # Config fields that change what is trained. Two configs with equal SPEC fields
 # describe the same run; anything else (status, timestamps, code version) is
 # bookkeeping.
-# ``band_limit_hz`` is the embedding cache's (None = full band; absent in older configs).
-SPEC = ["run_id", "dataset_id", "band_limit_hz", "hidden", "dropout", "attn_hidden", "lme_r",
-        "lme_learnable", "ordinal_weight", "lr", "weight_decay", "epochs", "patience",
-        "batch_size", "seeds", "folds"]
+# ``band_limit_hz`` is the embedding cache's (None = full band) and ``train_regimes`` the
+# regimes trained on (None = all); both are absent in older configs.
+SPEC = ["run_id", "dataset_id", "band_limit_hz", "train_regimes", "hidden", "dropout",
+        "attn_hidden", "lme_r", "lme_learnable", "ordinal_weight", "lr", "weight_decay",
+        "epochs", "patience", "batch_size", "seeds", "folds"]
 # Fields that may differ between two runs in a controlled comparison.
 FACTORS = ("hidden", "ordinal_weight")
 

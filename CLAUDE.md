@@ -41,6 +41,18 @@ New audio: `scripts/ingest.py status | pull <batch> | verify <batch> | merge <ba
 The individual commands still exist: `frog-manifest`, `scripts/embed_perch.py`,
 `frog-train`, `frog-report`, `viz/make_figures.py`, `python -m frog_mil.annotations`.
 
+Experiments outside the sweep keep their own state and runs root
+(`STORE/experiments/<name>/`, `--out-dir`), so they never enter the main tables
+or the validation selection; tables go to `results/experiments/<name>/`. Both
+are controls for the 8 kHz confound (method in `docs/methods.md`, results in
+`docs/findings.md`):
+- `scripts/bandlimit_experiment.py`: `embed_perch.py --band-limit 8000`
+  (recorded in the cache meta and the run's `band_limit_hz`) and
+  `frog-train --manifest <dir>` (a subset manifest).
+- `scripts/regime_transfer.py`: `frog-train --train-regimes <list>` trains and
+  early-stops on those regimes but scores every bag (recorded as `train_regimes`;
+  needs `--tag`). Needs the band-limit experiment's `emb_all_bl8000` cache.
+
 ## Storage and IDs
 
 - `src/frog_mil/config.py` holds every path. Large state lives in the group
@@ -102,5 +114,10 @@ The individual commands still exist: `frog-manifest`, `scripts/embed_perch.py`,
   matches the bee-eater *Merops oreobates*.
 - **Numpy indexing:** `a[:, rows, :, c]` (an index array and a scalar separated
   by a slice) moves the indexed axes to the front. Use `a[:, rows][..., c]`.
+- `frog status` says "trained by older training code" whenever `data.py`,
+  `models.py`, `pooling.py` or `train.py` changes, even if training is
+  unaffected. The sweep runs predate the option-only changes of 2026-10-07 and
+  were checked to reproduce bit for bit; retrain only if the training itself
+  changed.
 - `docs/findings.md` carries `<!-- dataset_id: ... -->`; `frog status` warns when
   it no longer matches the results. Update the prose, then the marker.

@@ -128,7 +128,8 @@ score and one validation score per seed, from models that never trained on it.
   reference on test would make every "worse than the best" claim optimistic.
 - **By index:** AP of the hours at each index against silent hours.
 - **By regime:** presence AP within each recording regime, with its own chance
-  level. This is the check against the 8 kHz shortcut.
+  level. It is the first check against the 8 kHz shortcut; the controls below
+  are the others.
 - **Fit per split:** each fold model's AP on its train, validation and test
   folds (`metrics.json`).
 - **Recall at fixed precision:** each fold model's score cutoff is the lowest one
@@ -139,6 +140,32 @@ score and one validation score per seed, from models that never trained on it.
     out-of-fold.
   - *zero-shot congeneric*: max over the bag of Perch's logits for the same genus.
   - *zero-shot Frog*: max over the bag of Perch's generic "Frog" logit.
+
+## Controls for the recording regime
+
+The 8 kHz regime is confounded with the labels, so two experiments test whether
+the model detects the format rather than the frogs. Both use the reference model
+(`mlp256-ord0.5-s2/lme`) with the main folds and seeds, and both keep their
+state and runs in `STORE/experiments/` so they never enter the main tables or
+the validation selection. Results are in
+[findings](findings.md#controls-for-the-8-khz-confound).
+
+- **Band-limit control** (`scripts/bandlimit_experiment.py`). Every 44.1 kHz
+  clip is resampled to 8 kHz before the usual resampling to 32 kHz
+  (`embed_perch.py --band-limit 8000`), the path the 8 kHz recordings take, so
+  no hour holds anything above 4 kHz. The model is trained on these embeddings
+  and on the recorded ones (a) on all hours and (b) on the 44.1 kHz hours only
+  (a subset manifest, `frog-train --manifest`), where no format cue exists and
+  the difference is the cost of losing > 4 kHz. A logistic regression on
+  single window embeddings measures how well the format can still be told apart.
+- **Cross-regime transfer** (`scripts/regime_transfer.py`). The model is trained
+  and early-stopped on the 44.1 kHz hours only or on the 8 kHz hours only
+  (`frog-train --train-regimes`), but the test fold is always every hour, so it
+  scores the other regime's hours out of fold without having heard that format.
+  This is done on the recorded and on the band-limited embeddings. The summary
+  compares AP within each regime with the all-regimes model, and checks whether
+  the transfer models rank the silent 8 kHz hours like the reference does, and
+  whether the top-ranked silent hours sit next to labelled calls.
 
 ## Reproducibility
 

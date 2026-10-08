@@ -28,8 +28,8 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import MaxNLocator
 
 from frog_mil.config import SPECIES
-from frog_mil.data import FoldView, load_bags
-from frog_mil.runs import load_model
+from frog_mil.data import fold_views, load_bags
+from frog_mil.runs import load_model, read_config
 
 BLUES = LinearSegmentedColormap.from_list("blues", ["#f4f8fd"] + BLUE_RAMP)
 
@@ -68,7 +68,7 @@ def infer_run(runs: Path, dataset_id: str, run_id: str, poolings: list[str], cac
         return out
     print(f"  first-{max_windows}-window inference for {run_id}: {', '.join(todo)}")
     data = load_bags(device=device, dataset_id=dataset_id)
-    views = [FoldView(data, f) for f in range(data.n_folds)]
+    views = fold_views(data, read_config(run_dir))
     mask = data.mask.clone()
     mask[:, max_windows:] = False
     n, N, C = data.x.shape[0], data.x.shape[1], len(SPECIES)

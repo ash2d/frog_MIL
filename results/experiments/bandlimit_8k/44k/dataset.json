@@ -1,0 +1,9 @@
+{
+  "dataset_id": "bae45880c5",
+  "n_bags": 3647,
+  "folds": 5,
+  "n_models": 2,
+  "reference_model": "mlp256-ord0.5-s2-bl8k/lme",
+  "test_best_model": "mlp256-ord0.5-s2-bl8k/lme",
+  "generated": "2026-10-07T17:40:09"
+}

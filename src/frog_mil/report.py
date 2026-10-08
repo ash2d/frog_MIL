@@ -82,9 +82,14 @@ def load_bag_table(models, bags_csv: Path | None = None):
 
 
 def val_selected(models):
-    """The model with the best mean validation macro AP (over seeds and folds)."""
+    """The model with the best mean validation macro AP (over seeds and folds).
+
+    Models trained on some regimes only are validated on those regimes, so their
+    val AP isn't comparable; they are candidates only if no other model is.
+    """
     ms = [m for m in models if m.is_model]
-    return max(ms, key=lambda m: float(np.mean(m.val_ap)))
+    full = [m for m in ms if not m.cfg.get("train_regimes")]
+    return max(full or ms, key=lambda m: float(np.mean(m.val_ap)))
 
 
 def controlled_pairs(models, factor: str):

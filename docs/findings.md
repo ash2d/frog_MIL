@@ -13,6 +13,13 @@ reference model (◆) is chosen on validation. Full tables are in
 blocks, resampled within regimes). "Tied" means the paired 95% CI of the
 difference includes 0. There is no multiple-comparison correction.
 
+All 35 sweep models (7 runs × 5 poolers) come from the same training code; two
+runs trained before a mid-session code change were retrained on 2026-10-07.
+Later changes only added options (`--band-limit`, `--manifest`,
+`--train-regimes`). A rerun with the new code reproduces the reference
+model's predictions bit for bit, so the "older training code" notes in
+`frog status` are harmless.
+
 ## Pooling comparison
 
 - **Reference (val-selected): MLP-256 probe + LME pooling, ordinal loss
@@ -86,17 +93,88 @@ only the regime would get *Gastrotheca* AP 0.188 (chance 0.087) and
 - **The 2019 hours are the hard *Gastrotheca* set**: 0.67–0.75 with 124
   positives. Zero-shot congeneric scores 0.514 there and 0.789 on 8 kHz hours,
   so the 8 kHz calls are easier for Perch too.
-- **But the 8 kHz negatives score high.** For the reference, the 95th
+- **The 8 kHz negatives score high.** For the reference, the 95th
   percentile of *Gastrotheca* scores on silent hours is 0.86 at 8 kHz, against
   0.28 (2019) and 0.01 (Nov–Dec 2018). 8 kHz hours make up 72% of the top 429
-  *Gastrotheca* scores and 68% of the positives. That is either a regime
-  shortcut or missed calls on busy 8 kHz nights. This analysis can't tell
-  which; the band-limit control below can.
+  *Gastrotheca* scores and 68% of the positives. The controls below point to
+  calls in those hours rather than a format shortcut.
 - **Small cells have wide CIs.** *Gastrotheca* `44k-1clip` has 14 positives
   (CIs ≈ 0.5–1.0). *Oreobates* `8k-3clip` positives come mostly from a few
   late-October nights, so resamples that drop them give lower CI bounds as low as 0.09.
 - **Pooler differences differ by regime.** On *Oreobates* `44k-1clip`
   (12-window bags), LME and max reach 0.89–0.90 and mean 0.77–0.84.
+
+## Controls for the 8 kHz confound
+
+Two experiments retrain the reference model (`mlp256-ord0.5-s2/lme`) with the
+main folds and seeds and score every hour out of fold (method in
+[methods](methods.md#controls-for-the-recording-regime)). Their models are kept
+out of the main sweep. Their all-regimes, as-recorded model reproduces the
+reference exactly (macro AP 0.856).
+
+### Band-limit control
+
+[`results/experiments/bandlimit_8k/`](../results/experiments/bandlimit_8k/SUMMARY.md):
+every 44.1 kHz clip resampled to 8 kHz before embedding, as the 8 kHz
+recordings are.
+
+- **Band-limiting changes nothing measurable.** On all 4914 hours, macro AP is
+  0.856 recorded and 0.853 band-limited: −0.003 [−0.016, +0.007]. Every
+  per-species and per-regime difference is tied.
+- **The audio above 4 kHz isn't needed.** On the 44.1 kHz hours alone (no
+  8 kHz audio anywhere), band-limiting gives +0.004 [−0.012, +0.019].
+- **Silent 8 kHz *Gastrotheca* hours still score high**: their 95th-percentile
+  score is 0.86 both ways. 8 kHz hours are 69% of the top-ranked hours with
+  band-limiting, against 72% without and 68% of the positives.
+- **But band-limiting doesn't hide the format.** A linear classifier on single
+  window embeddings tells 8 kHz from 44.1 kHz windows with AUC 1.000 before and
+  after band-limiting. It stays at 1.000 comparing only Sep–Oct 2018 with
+  Sep–Oct 2019, so the cue isn't the season. It is something else in the
+  recording chain (recorder, gain, noise floor, filter) or the year. So this
+  control alone can't rule out a format shortcut.
+
+### Cross-regime transfer
+
+[`results/experiments/regime_transfer/`](../results/experiments/regime_transfer/SUMMARY.md):
+the model is trained and early-stopped on the 44.1 kHz hours only or on the
+8 kHz hours only, and scores the other regime's hours without having heard that
+format. A transfer model can't use the format as a shortcut. Δ is against the
+all-regimes model on the same embeddings.
+
+| *Gastrotheca* AP | 8 kHz (chance 0.23) | 44.1 kHz 2019 (chance 0.04) |
+|---|---|---|
+| trained on all regimes | 0.889 | 0.715 |
+| trained on 44.1 kHz only | **0.843** (−0.046*) | 0.685 (−0.029) |
+| trained on 8 kHz only | 0.861 (−0.027) | **0.541** (−0.173*) |
+| zero-shot congeneric | 0.789 | 0.514 |
+
+Bold = transfer; `*` = CI excludes 0; recorded embeddings.
+
+- **A model that never heard 8 kHz audio still ranks the 8 kHz *Gastrotheca*
+  hours well**: AP 0.843 (0.851 band-limited) against 0.889 for the
+  all-regimes model, with chance at 0.23. *Oreobates* transfers too: 0.788
+  (0.813 band-limited) against 0.845, with chance at 0.08. The 8 kHz result
+  is not a format shortcut.
+- **It flags the same silent 8 kHz hours.** On the 976 silent 8 kHz
+  *Gastrotheca* hours, its scores correlate with the reference's at ρ = 0.85
+  (0.87 band-limited). 73% (80%) of its top 5% are also in the reference's top
+  5%, where chance is 5%.
+- **Those hours sit next to labelled calls.** Of the top 5% silent 8 kHz
+  *Gastrotheca* hours, 61–71% have a labelled positive hour within ±1 h, for
+  every model including the transfer ones. Among all silent 8 kHz hours the
+  rate is 14%. So the high-scoring silent hours are most likely hours with
+  calls that the labels miss, or faint calls at the edge of a calling bout,
+  not a format artefact. Listening to them would confirm it.
+- **Training on the other regime helps.** Without the 8 kHz hours, *Oreobates*
+  AP on the 44.1 kHz hours drops by −0.048* (Nov–Dec 2018) and −0.026* (2019).
+  *Gastrotheca* 2019 drops by −0.029, not significant. The 8 kHz hours teach the
+  model about calls, not only about the format.
+- **Transfer from 8 kHz to 44.1 kHz is weaker.** The 8 kHz-only model reaches
+  *Gastrotheca* 0.541 and *Oreobates* 0.643 on the 2019 hours (−0.173*,
+  −0.236*), though still far above chance (0.04, 0.13). Band-limiting the
+  44.1 kHz hours to match recovers part of that (0.597, 0.712). The 8 kHz data
+  are one season with 101 *Oreobates* positives, and part of the gap is the
+  missing high band.
 
 ## Validation vs test
 
@@ -154,17 +232,17 @@ compared as paired deltas**.
 
 ## Next steps
 
-1. **Band-limit all audio to 8 kHz** (resample the 44.1 kHz audio, re-embed,
-   rerun the sweep). This is the control for the regime confound: if the 8 kHz
-   negatives still score high when every regime has the same bandwidth, those
-   hours probably hold missed calls; if not, the probe learned the format.
+1. **Listen to the top-scored silent 8 kHz *Gastrotheca* hours** (the top 5%
+   in `results/experiments/regime_transfer/`, flagged by every model and mostly
+   within an hour of a labelled call). If they hold calls, relabel them; that
+   also removes most of the apparent 8 kHz confound. Do the same for the
+   top-weighted windows of isolated-call hours (`frog_mil.audio.read_segment`,
+   weights in `windows.npz`), to separate missed labels from confusion.
 2. **Pull the 693 pending Dropbox files** (8 kHz, 2018-10-24 23:00 → 11-03,
    `Helechos_09_11_2018 Martin`) with `scripts/ingest.py pull/verify/merge`,
    then `frog run`. They fill the gap between the two 2018 regimes.
 3. **Find the audio for labelled periods without it**: 2018-12-16 → 2019-02-26,
-   2019-04-17 → 09-22, and 2020.
-4. **Listen to the top-weighted windows**, especially high-scoring silent 8 kHz
-   *Gastrotheca* hours and isolated-call hours (`frog_mil.audio.read_segment`,
-   weights in `windows.npz`), to separate missed labels from confusion.
-5. **1 s instances** from Perch's pre-pooling embeddings `(5, 3, 1536)`: a finer
+   2019-04-17 → 09-22, and 2020. More 44.1 kHz *Gastrotheca* positives would
+   help most: 2019 is its hardest regime (124 positives).
+4. **1 s instances** from Perch's pre-pooling embeddings `(5, 3, 1536)`: a finer
    bag from the same forward pass. Isolated calls are where it could help.

@@ -30,6 +30,23 @@ def fold_roles(fold: np.ndarray, f: int, k: int) -> dict[str, np.ndarray]:
             "train": (fold != f) & (fold != (f + 1) % k)}
 
 
+def train_mask(data: "BagData", regimes: list[str] | None) -> np.ndarray | None:
+    """Bags a model may learn from (train and early stopping); None = all."""
+    if not regimes:
+        return None
+    reg = data.column("regime")
+    unknown = set(regimes) - set(reg)
+    if unknown:
+        raise ValueError(f"unknown regimes {sorted(unknown)}; have {sorted(set(reg))}")
+    return np.isin(reg, regimes)
+
+
+def fold_views(data: "BagData", cfg: dict) -> list["FoldView"]:
+    """One view per fold, honouring the run's ``train_regimes``."""
+    m = train_mask(data, cfg.get("train_regimes"))
+    return [FoldView(data, f, train_on=m) for f in range(data.n_folds)]
+
+
 @dataclass
 class BagData:
     x: torch.Tensor              # [n_bags, max_n, D] float16, zero-padded
@@ -114,12 +131,24 @@ def load_bags(emb_dir: Path = EMB_DIR, bags_csv: Path = BAGS_CSV,
 
 
 class FoldView:
-    """One fold's train/val/test bags, z-scored with that fold's train windows."""
+    """One fold's train/val/test bags, z-scored with that fold's train windows.
 
-    def __init__(self, data: BagData, f: int, standardize: bool = True):
+    ``train_on`` (bag mask) restricts train and val, i.e. what the model learns
+    from and is early-stopped on, to some bags (e.g. one recording regime). Test
+    is always the whole fold, so restricted models still score every bag out of
+    fold. ``val_all`` is the whole validation fold, scored for the saved
+    ``val_scores``.
+    """
+
+    def __init__(self, data: BagData, f: int, standardize: bool = True,
+                 train_on: np.ndarray | None = None):
         self.data, self.f = data, f
+        roles = data.roles(f)
+        roles["val_all"] = roles["val"]
+        if train_on is not None:
+            roles["train"], roles["val"] = roles["train"] & train_on, roles["val"] & train_on
         self.idx = {k: torch.from_numpy(np.flatnonzero(v)).to(data.device)
-                    for k, v in data.roles(f).items()}
+                    for k, v in roles.items()}
         if standardize:
             tr = self.idx["train"]
             w = data.x[tr][data.mask[tr]].float()          # [n_windows, D]

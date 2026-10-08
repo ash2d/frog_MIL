@@ -255,6 +255,36 @@ def test_end_to_end_train_and_report(synthetic, monkeypatch):
 
 
 # --------------------------------------------------------------------------- pipeline
+def test_train_regimes_restrict_learning_not_scoring(synthetic):
+    """A regime-restricted model trains and early-stops on its regimes only, but
+    still scores every bag of the test fold (and every val bag)."""
+    from frog_mil import data as D
+    from frog_mil import train as T
+
+    root, did = synthetic
+    data = D.load_bags(root / "emb", root / "outputs" / "bags.csv",
+                       root / "outputs" / "summary.json", dataset_id=did)
+    a = T.build_parser().parse_args(["--seeds", "1", "--epochs", "2", "--patience", "1",
+                                     "--train-regimes", "8k-3clip", "--tag", "t"])
+    cfg = T.config_from_args(a, did, data.n_folds)
+    assert cfg["train_regimes"] == ["8k-3clip"]
+    views = D.fold_views(data, cfg)
+    reg = data.column("regime")
+    for f, v in enumerate(views):
+        r = data.roles(f)
+        for role in ("train", "val"):
+            got = np.zeros(len(reg), bool)
+            got[v.idx[role].numpy()] = True
+            assert (got == (r[role] & (reg == "8k-3clip"))).all()
+        assert set(v.idx["test"].numpy()) == set(np.flatnonzero(r["test"]))
+        assert set(v.idx["val_all"].numpy()) == set(np.flatnonzero(r["val"]))
+    T.train_model(data, views, cfg, "mean", root / "restricted")
+    d = np.load(root / "restricted" / "predictions.npz")
+    assert not np.isnan(d["scores"]).any() and not np.isnan(d["val_scores"]).any()
+    with pytest.raises(ValueError):
+        D.fold_views(data, {"train_regimes": ["16k"]})
+
+
 def test_sweep_entries_parse_to_distinct_runs():
     from frog_mil import pipeline
     from frog_mil import runs as rs

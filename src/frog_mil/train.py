@@ -33,7 +33,7 @@ import torch.nn.functional as F
 
 from . import runs as rs
 from .config import EMB_DIR, OUTPUTS, RUNS, SPECIES
-from .data import BagData, FoldView, load_bags
+from .data import BagData, FoldView, fold_views, load_bags
 from .evaluate import clock_baseline, species_ap, zero_shot_baseline
 from .models import count_params
 from .pooling import POOLERS
@@ -100,7 +100,8 @@ def train_fold(data: BagData, view: FoldView, cfg: dict, pooling: str, seed: int
                 break
     model.load_state_dict(best_state)
 
-    res = {r: score(model, view, r, windows=(r == "test")) for r in ("train", "val", "test")}
+    res = {r: score(model, view, r, windows=(r == "test"))
+           for r in ("train", "val", "test", "val_all")}
     m = {"seed": seed, "fold": f, "epochs": ep + 1, "val_macro_ap": best}
     for r in ("train", "val", "test"):
         ap = species_ap(y[view.idx[r].cpu().numpy()], res[r]["prob"])
@@ -127,8 +128,8 @@ def train_model(data: BagData, views: list[FoldView], cfg: dict, pooling: str, o
     for s in range(S):
         for view in views:
             m, res, state, params = train_fold(data, view, cfg, pooling, s)
-            ti, vi = view.idx["test"].cpu().numpy(), view.idx["val"].cpu().numpy()
-            test[s, ti], val[s, vi] = res["test"]["prob"], res["val"]["prob"]
+            ti, vi = view.idx["test"].cpu().numpy(), view.idx["val_all"].cpu().numpy()
+            test[s, ti], val[s, vi] = res["test"]["prob"], res["val_all"]["prob"]
             wl[s, ti], ww[s, ti] = res["test"]["logit_w"], res["test"]["weight_w"]
             val_ap[s, view.f], epochs[s, view.f] = m["val_macro_ap"], m["epochs"]
             if f"{SPECIES[0]}_thr2" in m:
@@ -195,6 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--force", action="store_true", help="retrain finished poolers too")
     ap.add_argument("--pooling", default="all",
                     help="'all' or a comma list of " + ", ".join(POOLERS))
+    ap.add_argument("--train-regimes", default=None,
+                    help="comma list of regimes to train and early-stop on (default: all); "
+                         "every bag of the test fold is still scored. Needs --tag")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--hidden", type=int, default=0, help="0 = linear probe")
     ap.add_argument("--dropout", type=float, default=0.2)
@@ -217,6 +221,8 @@ def config_from_args(a, dataset_id: str, folds: int,
     """The run config (``runs.SPEC`` fields) that these arguments train."""
     return {"run_id": a.tag or rs.run_id_for(a.hidden, a.ordinal_weight),
             "dataset_id": dataset_id, "band_limit_hz": band_limit_hz,
+            "train_regimes": (sorted(a.train_regimes.split(","))
+                              if getattr(a, "train_regimes", None) else None),
             "hidden": a.hidden, "dropout": a.dropout,
             "attn_hidden": a.attn_hidden, "lme_r": a.lme_r, "lme_learnable": a.lme_learnable,
             "ordinal_weight": a.ordinal_weight, "lr": a.lr, "weight_decay": a.weight_decay,
@@ -226,6 +232,8 @@ def config_from_args(a, dataset_id: str, folds: int,
 
 def main() -> None:
     a = build_parser().parse_args()
+    if a.train_regimes and not a.tag:
+        raise SystemExit("--train-regimes isn't part of the run_id; give the run a --tag")
 
     t0 = time.time()
     data = load_bags(a.emb_dir, a.manifest / "bags.csv", a.manifest / "summary.json",
@@ -257,7 +265,7 @@ def main() -> None:
     if len(todo) < len(poolings):
         print(f"already finished: {', '.join(p for p in poolings if p not in todo)}")
 
-    views = [FoldView(data, f) for f in range(data.n_folds)]
+    views = fold_views(data, cfg)
     for p in todo:
         t0 = time.time()
         r = train_model(data, views, cfg, p, out / p)
